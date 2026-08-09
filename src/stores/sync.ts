@@ -13,7 +13,7 @@ import type { SyncReport } from "@/sync/types";
 
 const PRESET_KEY = "sync.preset";
 const QUIET_MS = 30_000;
-const CLOSE_TIMEOUT_MS = 4000;
+const CLOSE_TIMEOUT_MS = 2500;
 
 export type AutoState = "off" | "idle" | "pending" | "syncing" | "stale";
 

@@ -22,11 +22,16 @@ onMounted(async () => {
 
   const appWindow = getCurrentWindow();
 
+  let closing = false;
+
   await appWindow.onCloseRequested(async (event) => {
+    if (closing) return;
+
+    closing = true;
     event.preventDefault();
 
-    await syncStore.flushBeforeClose();
-    await appWindow.destroy();
+    await syncStore.flushBeforeClose().catch(() => undefined);
+    await appWindow.destroy().catch(() => appWindow.close());
   });
 });
 </script>
