@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { readSyncSettings } from "@/sync/settings";
 import type { Change, SyncResponse } from "@/sync/types";
 
 export function saveToken(token: string): Promise<void> {
@@ -17,12 +18,30 @@ export function getToken(): Promise<string> {
   return invoke("sync_get_token");
 }
 
-export async function exchange(url: string, since: number, changes: Change[]): Promise<SyncResponse> {
-  const raw: string = await invoke("sync_request", {
-    url,
-    payload: JSON.stringify({ since, changes }),
-  });
+export async function call(path: string, payload: Record<string, unknown> = {}): Promise<unknown> {
+  const { url } = await readSyncSettings();
 
+  if (!url) throw new Error("Синхронизация не настроена — подключите общую базу в настройках");
+
+  return request(url, path, payload);
+}
+
+export async function exchange(url: string, since: number, changes: Change[]): Promise<SyncResponse> {
+  const parsed = await request(url, "/sync", { since, changes });
+  const revision = Reflect.get(Object(parsed), "revision");
+  const incoming = Reflect.get(Object(parsed), "changes");
+
+  if (typeof revision !== "number") throw new Error("В ответе нет номера ревизии");
+
+  return {
+    revision,
+    hasMore: Reflect.get(Object(parsed), "hasMore") === true,
+    changes: Array.isArray(incoming) ? incoming.filter(isChange) : [],
+  };
+}
+
+async function request(url: string, path: string, payload: unknown): Promise<unknown> {
+  const raw: string = await invoke("sync_request", { url, path, payload: JSON.stringify(payload) });
   const parsed: unknown = JSON.parse(raw);
 
   if (typeof parsed !== "object" || parsed === null) throw new Error("Сервер вернул неожиданный ответ");
@@ -31,16 +50,7 @@ export async function exchange(url: string, since: number, changes: Change[]): P
 
   if (typeof error === "string") throw new Error(error);
 
-  const revision = Reflect.get(parsed, "revision");
-  const incoming = Reflect.get(parsed, "changes");
-
-  if (typeof revision !== "number") throw new Error("В ответе нет номера ревизии");
-
-  return {
-    revision,
-    hasMore: Reflect.get(parsed, "hasMore") === true,
-    changes: Array.isArray(incoming) ? incoming.filter(isChange) : [],
-  };
+  return parsed;
 }
 
 function isChange(value: unknown): value is Change {

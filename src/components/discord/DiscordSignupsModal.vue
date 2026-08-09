@@ -145,7 +145,7 @@ function formatTime(value: string): string {
   <UiModal v-model="isOpen" title="Заявки из Discord" class="max-w-3xl">
     <div class="flex flex-col gap-4">
       <div v-if="!isReady" class="alert alert-warning">
-        Сначала укажите токен бота и ID сервера в «Справочниках».
+        Сначала подключите бота и выберите сервер в «Справочниках».
       </div>
 
       <div v-if="error" class="alert alert-error">{{ error }}</div>

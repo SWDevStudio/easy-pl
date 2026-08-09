@@ -13,8 +13,8 @@ export const useDiscordStore = defineStore("discord", () => {
   const emoji = ref(DEFAULT_EMOJI);
   const members = ref<discord.DiscordUser[]>([]);
   const membersLoadedAt = ref<number | null>(null);
-  const tokenSaved = ref(false);
-  const guildName = ref<string | null>(null);
+  const bot = ref<discord.DiscordBot | null>(null);
+  const guilds = ref<discord.DiscordGuild[]>([]);
   const settingsLoaded = ref(false);
   const isBusy = ref(false);
   const isLoadingMembers = ref(false);
@@ -22,7 +22,8 @@ export const useDiscordStore = defineStore("discord", () => {
 
   let membersRequest: Promise<void> | null = null;
 
-  const isReady = computed(() => tokenSaved.value && guildId.value.trim().length > 0);
+  const isReady = computed(() => bot.value !== null && guildId.value.trim().length > 0);
+  const guildName = computed(() => guilds.value.find((item) => item.id === guildId.value)?.name ?? null);
   const membersFresh = computed(
     () => membersLoadedAt.value !== null && Date.now() - membersLoadedAt.value < MEMBERS_TTL_MS,
   );
@@ -33,7 +34,6 @@ export const useDiscordStore = defineStore("discord", () => {
 
       guildId.value = settings[GUILD_KEY] ?? "";
       emoji.value = settings[EMOJI_KEY] ?? DEFAULT_EMOJI;
-      tokenSaved.value = await discord.hasToken();
       settingsLoaded.value = true;
       error.value = null;
     } catch (cause) {
@@ -41,9 +41,20 @@ export const useDiscordStore = defineStore("discord", () => {
     }
   }
 
+  async function connect() {
+    return run(async () => {
+      bot.value = await discord.bot();
+      guilds.value = await discord.listGuilds();
+
+      const only = guilds.value.length === 1 ? guilds.value[0] : undefined;
+
+      if (only && guildId.value !== only.id) await selectGuild(only.id);
+    });
+  }
+
   async function ensureMembers(force = false): Promise<void> {
     if (!settingsLoaded.value) await load();
-    if (!isReady.value) return;
+    if (!guildId.value) return;
     if (!force && membersFresh.value) return;
     if (membersRequest) return membersRequest;
 
@@ -75,43 +86,21 @@ export const useDiscordStore = defineStore("discord", () => {
     membersLoadedAt.value = null;
   }
 
-  async function saveToken(token: string) {
-    return run(async () => {
-      await discord.saveToken(token);
-      tokenSaved.value = true;
-      guildName.value = null;
-      dropMembersCache();
-    });
-  }
+  async function selectGuild(value: string) {
+    guildId.value = value.trim();
 
-  async function clearToken() {
-    return run(async () => {
-      await discord.clearToken();
-      tokenSaved.value = false;
-      guildName.value = null;
-      dropMembersCache();
-    });
+    await writeSetting(GUILD_KEY, guildId.value);
+    dropMembersCache();
   }
 
   async function saveGuild(value: string) {
-    return run(async () => {
-      guildId.value = value.trim();
-      await writeSetting(GUILD_KEY, guildId.value);
-      guildName.value = null;
-      dropMembersCache();
-    });
+    return run(() => selectGuild(value));
   }
 
   async function saveEmoji(value: string) {
     return run(async () => {
       emoji.value = value.trim() || DEFAULT_EMOJI;
       await writeSetting(EMOJI_KEY, emoji.value);
-    });
-  }
-
-  async function check() {
-    return run(async () => {
-      guildName.value = await discord.checkGuild(guildId.value);
     });
   }
 
@@ -138,19 +127,18 @@ export const useDiscordStore = defineStore("discord", () => {
     members,
     membersLoadedAt,
     membersFresh,
-    tokenSaved,
+    bot,
+    guilds,
     guildName,
     isBusy,
     isLoadingMembers,
     isReady,
     error,
     load,
+    connect,
     ensureMembers,
-    saveToken,
-    clearToken,
     saveGuild,
     saveEmoji,
-    check,
   };
 });
 

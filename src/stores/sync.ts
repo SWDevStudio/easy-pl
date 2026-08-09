@@ -2,7 +2,8 @@ import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import * as service from "@/services/sync";
 import { decodeConnection, encodeConnection, normalizeUrl, type Connection } from "@/sync/code";
-import { clearUrl, readSyncSettings, resetSyncState, runSync, saveUrl } from "@/sync/run";
+import { runSync } from "@/sync/run";
+import { clearUrl, readSyncSettings, resetSyncState, saveUrl } from "@/sync/settings";
 import type { SyncReport } from "@/sync/types";
 
 export const useSyncStore = defineStore("sync", () => {

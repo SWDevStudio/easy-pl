@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { storeToRefs } from "pinia";
-import { UiButton, UiPanel } from "@/components/ui";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { UiButton, UiPanel, UiSelect } from "@/components/ui";
 import { useDiscordStore } from "@/stores/discord";
 
 const discordStore = useDiscordStore();
-const { guildId, emoji, members, membersLoadedAt, tokenSaved, guildName, isBusy, isLoadingMembers, error } =
+const { guildId, emoji, members, membersLoadedAt, bot, guilds, guildName, isBusy, isLoadingMembers, error } =
   storeToRefs(discordStore);
+
+const emojiDraft = ref("");
+const inviteOpened = ref(false);
 
 const membersHint = computed(() => {
   if (isLoadingMembers.value) return "Загружаем...";
@@ -15,24 +19,17 @@ const membersHint = computed(() => {
   return `Загружено ${members.value.length}, обновлено в ${new Date(membersLoadedAt.value).toLocaleTimeString("ru-RU")}`;
 });
 
-const token = ref("");
-const guildDraft = ref("");
-const emojiDraft = ref("");
-
 onMounted(async () => {
   await discordStore.load();
-  guildDraft.value = guildId.value;
   emojiDraft.value = emoji.value;
+  await discordStore.connect();
 });
 
-async function submitToken() {
-  const saved = await discordStore.saveToken(token.value);
+async function invite() {
+  if (!bot.value) return;
 
-  if (saved) token.value = "";
-}
-
-async function submitGuild() {
-  await discordStore.saveGuild(guildDraft.value);
+  await openUrl(bot.value.inviteUrl);
+  inviteOpened.value = true;
 }
 
 async function submitEmoji() {
@@ -47,51 +44,52 @@ async function submitEmoji() {
       <div v-if="error" class="alert alert-error">{{ error }}</div>
 
       <fieldset class="fieldset">
-        <label class="fieldset-legend text-sm" for="discord-token">Токен бота</label>
+        <span class="fieldset-legend text-sm">Бот</span>
 
-        <div class="flex flex-wrap items-center gap-2">
-          <input
-            id="discord-token"
-            v-model="token"
-            type="password"
-            class="input w-full max-w-md"
-            :placeholder="tokenSaved ? 'Сохранён — введите новый, чтобы заменить' : 'Вставьте токен бота'"
-            autocomplete="off"
-          />
-          <UiButton :disabled="!token.trim()" :is-loading="isBusy" @click="submitToken">Сохранить</UiButton>
-          <UiButton v-if="tokenSaved" class="btn-ghost text-error" @click="discordStore.clearToken()">
-            Удалить
-          </UiButton>
+        <div class="flex flex-wrap items-center gap-3">
+          <template v-if="bot">
+            <span class="badge badge-success">Подключён</span>
+            <span class="font-medium">{{ bot.username }}</span>
+            <UiButton class="btn-ghost" @click="invite">Добавить на сервер</UiButton>
+          </template>
+          <template v-else>
+            <span class="badge badge-ghost">Не подключён</span>
+            <UiButton class="btn-ghost" :is-loading="isBusy" @click="discordStore.connect()">
+              Проверить ещё раз
+            </UiButton>
+          </template>
         </div>
 
         <p class="text-muted text-sm">
-          Хранится в диспетчере учётных данных Windows, а не в базе приложения — в резервные копии и
-          синхронизацию он не попадёт.
-          <span v-if="tokenSaved" class="text-success">Токен сохранён.</span>
-          <span v-else>Токен не задан.</span>
+          Токен бота живёт на сервере синхронизации, а не на компьютерах — вводить его здесь не нужно.
+          «Добавить на сервер» откроет страницу Discord, где нужно выбрать свой сервер и подтвердить
+          доступ.
+          <span v-if="inviteOpened">После добавления нажмите «Проверить ещё раз».</span>
         </p>
       </fieldset>
 
       <fieldset class="fieldset">
-        <label class="fieldset-legend text-sm" for="discord-guild">ID сервера</label>
+        <span class="fieldset-legend text-sm">Сервер</span>
 
         <div class="flex flex-wrap items-center gap-2">
-          <input
-            id="discord-guild"
-            v-model="guildDraft"
-            class="input w-full max-w-md"
-            placeholder="Правый клик по серверу → Копировать ID сервера"
-            inputmode="numeric"
-          />
-          <UiButton class="btn-ghost" :is-loading="isBusy" @click="submitGuild">Сохранить</UiButton>
-          <UiButton :disabled="!tokenSaved || !guildId" :is-loading="isBusy" @click="discordStore.check()">
-            Проверить связь
-          </UiButton>
+          <UiSelect
+            :model-value="guildId"
+            :options="guilds"
+            option-value="id"
+            option-label="name"
+            class="w-full max-w-md"
+            placeholder="Выберите сервер"
+            searchable
+            @update:model-value="(value) => discordStore.saveGuild(String(value ?? ''))"
+          >
+            <template #empty>Бот пока не добавлен ни на один сервер</template>
+          </UiSelect>
+          <UiButton class="btn-ghost" :is-loading="isBusy" @click="discordStore.connect()">Обновить</UiButton>
         </div>
 
-        <p v-if="guildName" class="text-success text-sm">Связь есть: «{{ guildName }}»</p>
+        <p v-if="guildName" class="text-success text-sm">Заявки читаются с сервера «{{ guildName }}»</p>
         <p v-else class="text-muted text-sm">
-          Включите «Режим разработчика» в настройках Discord, чтобы копировать ID.
+          В списке — серверы, на которые бот уже добавлен. Идентификаторы копировать не нужно.
         </p>
       </fieldset>
 
@@ -114,7 +112,7 @@ async function submitEmoji() {
         <div class="flex flex-wrap items-center gap-2">
           <UiButton
             class="btn-ghost"
-            :disabled="!tokenSaved || !guildId"
+            :disabled="!guildId"
             :is-loading="isLoadingMembers"
             @click="discordStore.ensureMembers(true)"
           >

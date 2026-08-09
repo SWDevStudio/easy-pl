@@ -46,11 +46,15 @@ pub fn sync_get_token() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn sync_request(url: String, payload: String) -> Result<String, String> {
+pub async fn sync_request(url: String, path: String, payload: String) -> Result<String, String> {
     let endpoint = url.trim().trim_end_matches('/').to_string();
 
     if endpoint.is_empty() {
         return Err("Не указан адрес сервера синхронизации".to_string());
+    }
+
+    if !path.starts_with('/') {
+        return Err("Маршрут должен начинаться со слэша".to_string());
     }
 
     let client = reqwest::Client::builder()
@@ -59,7 +63,7 @@ pub async fn sync_request(url: String, payload: String) -> Result<String, String
         .map_err(|error| format!("Не удалось создать HTTP-клиент: {error}"))?;
 
     let response = client
-        .post(format!("{endpoint}/sync"))
+        .post(format!("{endpoint}{path}"))
         .header("Authorization", format!("Bearer {}", token()?))
         .header("Content-Type", "application/json")
         .body(payload)
@@ -79,10 +83,13 @@ pub async fn sync_request(url: String, payload: String) -> Result<String, String
         .await
         .map_err(|error| format!("Не удалось прочитать ответ: {error}"))?;
 
+    if status == 200 || body.trim_start().starts_with('{') {
+        return Ok(body);
+    }
+
     match status {
-        200 => Ok(body),
         401 => Err("Сервер отклонил ключ синхронизации".to_string()),
         404 => Err("Адрес указывает не на сервер синхронизации".to_string()),
-        code => Err(format!("Сервер вернул ошибку {code}: {body}")),
+        code => Err(format!("Сервер вернул ошибку {code}")),
     }
 }

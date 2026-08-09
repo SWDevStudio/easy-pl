@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "./sync";
 
 export interface DiscordUser {
   id: string;
@@ -6,20 +6,9 @@ export interface DiscordUser {
   displayName: string;
 }
 
-export function saveToken(token: string): Promise<void> {
-  return invoke("discord_save_token", { token });
-}
-
-export function clearToken(): Promise<void> {
-  return invoke("discord_clear_token");
-}
-
-export function hasToken(): Promise<boolean> {
-  return invoke("discord_has_token");
-}
-
-export function checkGuild(guildId: string): Promise<string> {
-  return invoke("discord_check", { guildId });
+export interface DiscordGuild {
+  id: string;
+  name: string;
 }
 
 export interface DiscordChannel {
@@ -41,24 +30,56 @@ export interface DiscordMessage {
   reactions: DiscordReaction[];
 }
 
-export function listMembers(guildId: string): Promise<DiscordUser[]> {
-  return invoke("discord_list_members", { guildId });
+export interface DiscordBot {
+  id: string;
+  username: string;
+  inviteUrl: string;
 }
 
-export function listChannels(guildId: string): Promise<DiscordChannel[]> {
-  return invoke("discord_list_channels", { guildId });
+export async function bot(): Promise<DiscordBot> {
+  const raw = await call("/discord/bot");
+
+  return {
+    id: string(raw, "id"),
+    username: string(raw, "username"),
+    inviteUrl: string(raw, "inviteUrl"),
+  };
 }
 
-export function listMessages(channelId: string, limit = 10): Promise<DiscordMessage[]> {
-  return invoke("discord_list_messages", { channelId, limit });
+export async function listGuilds(): Promise<DiscordGuild[]> {
+  return named(await call("/discord/guilds"));
 }
 
-export function reactionUsers(
+export async function listChannels(guildId: string): Promise<DiscordChannel[]> {
+  return named(await call("/discord/channels", { guildId }));
+}
+
+export async function listMembers(guildId: string): Promise<DiscordUser[]> {
+  return users(await call("/discord/members", { guildId }));
+}
+
+export async function listMessages(channelId: string, limit = 10): Promise<DiscordMessage[]> {
+  const raw = await call("/discord/messages", { channelId, limit });
+
+  return list(raw).map((item) => ({
+    id: string(item, "id"),
+    author: string(item, "author"),
+    content: string(item, "content"),
+    timestamp: string(item, "timestamp"),
+    reactions: list(Reflect.get(Object(item), "reactions")).map((entry) => ({
+      key: string(entry, "key"),
+      label: string(entry, "label"),
+      count: number(entry, "count"),
+    })),
+  }));
+}
+
+export async function reactionUsers(
   channelId: string,
   messageId: string,
   emoji: string,
 ): Promise<DiscordUser[]> {
-  return invoke("discord_reaction_users", { channelId, messageId, emoji });
+  return users(await call("/discord/reactions", { channelId, messageId, emoji }));
 }
 
 export interface MessageLink {
@@ -73,4 +94,36 @@ export function parseMessageLink(link: string): MessageLink | null {
   if (!match) return null;
 
   return { guildId: match[1]!, channelId: match[2]!, messageId: match[3]! };
+}
+
+function users(raw: unknown): DiscordUser[] {
+  return list(raw).map((item) => ({
+    id: string(item, "id"),
+    username: string(item, "username"),
+    displayName: string(item, "displayName"),
+  }));
+}
+
+function named(raw: unknown): { id: string; name: string }[] {
+  return list(raw).map((item) => ({ id: string(item, "id"), name: string(item, "name") }));
+}
+
+function list(raw: unknown): unknown[] {
+  return Array.isArray(raw) ? raw : [];
+}
+
+function string(source: unknown, key: string): string {
+  if (typeof source !== "object" || source === null) return "";
+
+  const value = Reflect.get(source, key);
+
+  return typeof value === "string" ? value : "";
+}
+
+function number(source: unknown, key: string): number {
+  if (typeof source !== "object" || source === null) return 0;
+
+  const value = Reflect.get(source, key);
+
+  return typeof value === "number" ? value : 0;
 }
