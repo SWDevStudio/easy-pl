@@ -73,8 +73,6 @@ export const useSyncStore = defineStore("sync", () => {
 
     isSyncing.value = true;
 
-    const before = new Date().toISOString();
-
     try {
       const result = await runSync();
 
@@ -88,7 +86,7 @@ export const useSyncStore = defineStore("sync", () => {
       if (moved(result)) toast.success(describe(result));
     } catch (cause) {
       lastFailure.value = messageOf(cause);
-      hasPending.value = hasPending.value || before < new Date().toISOString();
+      hasPending.value = true;
     } finally {
       isSyncing.value = false;
     }

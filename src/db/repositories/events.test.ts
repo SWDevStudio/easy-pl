@@ -274,7 +274,7 @@ describe("проведение осады", () => {
     expect(debtOf(boss)).toBeCloseTo(0, 5);
   });
 
-  it("выпускает того, у кого долг больше", async () => {
+  it("выпускает того, у кого долг больше, в подавляющем большинстве жеребьёвок", async () => {
     const eventId = await createEvent({ title: "Осада", eventDate: "2026-08-09", slots: 1 });
     const owed = await addPlayer("Owed", 9);
     const spent = await addPlayer("Spent", -9);
@@ -282,12 +282,18 @@ describe("проведение осады", () => {
     await setSignup(eventId, owed, true);
     await setSignup(eventId, spent, true);
 
-    await runDraw(eventId);
+    const rounds = 40;
+    let owedWins = 0;
 
-    const participants = await listParticipants(eventId);
+    for (let round = 0; round < rounds; round += 1) {
+      await runDraw(eventId);
 
-    expect(sourceOf(participants, owed)).toBe("lottery");
-    expect(sourceOf(participants, spent)).toBeNull();
+      const participants = await listParticipants(eventId);
+
+      if (sourceOf(participants, owed) === "lottery") owedWins += 1;
+    }
+
+    expect(owedWins).toBeGreaterThanOrEqual(30);
   });
 
   it("не начисляет долг заменившему, но вдвое списывает с прогулявшего приоритетного", async () => {

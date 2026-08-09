@@ -2,6 +2,8 @@ type Listener = () => void;
 
 const listeners = new Set<Listener>();
 const WRITES = /^\s*(insert|update|delete|replace)\b/i;
+const SYNCED =
+  /\b(classes|raids|players|events|event_signups|event_slots|attendance|tombstones)\b/i;
 
 let muted = 0;
 
@@ -14,7 +16,7 @@ export function onWrite(listener: Listener): () => void {
 }
 
 export function notifyWrite(query: string): void {
-  if (muted > 0 || !WRITES.test(query)) return;
+  if (muted > 0 || !WRITES.test(query) || !SYNCED.test(query)) return;
 
   for (const listener of listeners) listener();
 }

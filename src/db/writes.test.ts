@@ -22,6 +22,18 @@ describe("отслеживание записей в базу", () => {
     watcher.stop();
   });
 
+  it("не считает служебные таблицы — иначе обмен будит сам себя", () => {
+    const watcher = counter();
+
+    notifyWrite("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
+    notifyWrite("UPDATE settings SET value = ? WHERE key = 'sync.revision'");
+    notifyWrite("INSERT INTO _migrations (version, name, applied_at) VALUES (?, ?, ?)");
+    notifyWrite("INSERT INTO draw_log (event_id, seed) VALUES (?, ?)");
+
+    expect(watcher.count()).toBe(0);
+    watcher.stop();
+  });
+
   it("не считает чтение", () => {
     const watcher = counter();
 
