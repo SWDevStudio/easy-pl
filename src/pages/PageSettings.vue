@@ -4,6 +4,7 @@ import { storeToRefs } from "pinia";
 import ClassFormModal from "@/components/classes/ClassFormModal.vue";
 import DiscordSettingsPanel from "@/components/discord/DiscordSettingsPanel.vue";
 import RaidFormModal from "@/components/raids/RaidFormModal.vue";
+import ThemePanel from "@/components/settings/ThemePanel.vue";
 import SyncSettingsPanel from "@/components/sync/SyncSettingsPanel.vue";
 import {
   UiButton,
@@ -142,6 +143,7 @@ async function confirmRemoveRaid() {
 
 <template>
   <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+    <ThemePanel class="col-span-2 lg:col-span-4" />
     <DiscordSettingsPanel class="col-span-2 lg:col-span-4" />
     <SyncSettingsPanel class="col-span-2 lg:col-span-4" />
 

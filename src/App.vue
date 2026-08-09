@@ -3,6 +3,7 @@ import { onMounted } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import SyncStatusBadge from "@/components/sync/SyncStatusBadge.vue";
 import { UiToaster } from "@/components/ui";
+import { useTheme } from "@/composables/useTheme";
 import { useSyncStore } from "@/stores/sync";
 
 const links = [
@@ -13,8 +14,10 @@ const links = [
 ];
 
 const syncStore = useSyncStore();
+const { load: loadTheme } = useTheme();
 
 onMounted(async () => {
+  await loadTheme();
   await syncStore.startAuto();
 
   const appWindow = getCurrentWindow();
