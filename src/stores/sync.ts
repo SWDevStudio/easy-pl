@@ -1,7 +1,10 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import * as service from "@/services/sync";
+import { readSettings, writeSetting } from "@/db/repositories/settings";
 import { builtInConnection } from "@/config";
+
+const PRESET_KEY = "sync.preset";
 import { decodeConnection, encodeConnection, normalizeUrl, type Connection } from "@/sync/code";
 import { runSync } from "@/sync/run";
 import { clearUrl, readSyncSettings, resetSyncState, saveUrl } from "@/sync/settings";
@@ -40,17 +43,18 @@ export const useSyncStore = defineStore("sync", () => {
 
     if (!preset.url) return;
 
+    const fingerprint = await fingerprintOf(preset);
+    const settings = await readSettings();
+    const adopted = settings[PRESET_KEY] ?? "";
+    const changed = adopted !== "" && adopted !== fingerprint;
     const state = await readSyncSettings();
 
-    if (!state.url) {
-      await saveUrl(preset.url);
-      fromBuild.value = true;
-    }
+    if (!state.url || changed) await saveUrl(preset.url);
+    if (preset.token && (changed || !(await service.hasToken()))) await service.saveToken(preset.token);
 
-    if (preset.token && !(await service.hasToken())) {
-      await service.saveToken(preset.token);
-      fromBuild.value = true;
-    }
+    await writeSetting(PRESET_KEY, fingerprint);
+
+    fromBuild.value = true;
   }
 
   async function connect(code: string) {
@@ -151,6 +155,13 @@ export const useSyncStore = defineStore("sync", () => {
     readCode,
   };
 });
+
+async function fingerprintOf(preset: Connection): Promise<string> {
+  const bytes = new TextEncoder().encode(`${preset.url}\n${preset.token}`);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
