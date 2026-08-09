@@ -190,6 +190,43 @@ describe("runMigrations", () => {
     db.close();
   });
 
+  it("выдаёт каждой записи уникальный идентификатор для синхронизации", async () => {
+    const db = new DatabaseSync(":memory:");
+
+    await runMigrations(createExecutor(db));
+
+    for (const table of ["classes", "raids", "players", "events"]) {
+      const rows = db.prepare(`SELECT COUNT(*) AS total, COUNT(DISTINCT uid) AS unique_uids FROM "${table}"`).all();
+      const total = Reflect.get(rows[0] ?? {}, "total");
+      const unique = Reflect.get(rows[0] ?? {}, "unique_uids");
+
+      expect(unique).toBe(total);
+    }
+
+    const empty = countOf(db, "classes", "uid IS NULL OR uid = ''");
+
+    expect(empty).toBe(0);
+    expect(tableNames(db)).toEqual(expect.arrayContaining(["tombstones"]));
+    db.close();
+  });
+
+  it("не перевыдаёт идентификаторы при повторном прогоне", async () => {
+    const db = new DatabaseSync(":memory:");
+    const executor = createExecutor(db);
+
+    await runMigrations(executor);
+
+    const before = db.prepare("SELECT uid FROM classes ORDER BY id LIMIT 1").all()[0];
+
+    db.prepare("DELETE FROM _migrations").run();
+    await runMigrations(executor);
+
+    const after = db.prepare("SELECT uid FROM classes ORDER BY id LIMIT 1").all()[0];
+
+    expect(Reflect.get(after ?? {}, "uid")).toBe(Reflect.get(before ?? {}, "uid"));
+    db.close();
+  });
+
   it("не пытается повторно добавить существующие колонки", async () => {
     const db = new DatabaseSync(":memory:");
     const executor = createExecutor(db);

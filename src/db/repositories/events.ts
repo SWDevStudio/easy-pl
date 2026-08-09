@@ -2,6 +2,7 @@ import { draw } from "@/lottery/draw";
 import { nextDebt } from "@/lottery/fairness";
 import { createSeed } from "@/lottery/random";
 import { getDb } from "../client";
+import { newUid, recordTombstone, uidOf } from "../uid";
 import {
   EventStateError,
   type EventInput,
@@ -90,8 +91,9 @@ export async function createEvent(input: EventInput): Promise<number> {
   const db = await getDb();
 
   await db.execute(
-    `INSERT INTO events (title, event_date, slots, reserve_size, updated_at) VALUES (?, ?, ?, 0, ?)`,
-    [input.title.trim(), input.eventDate, input.slots, now()],
+    `INSERT INTO events (title, event_date, slots, reserve_size, updated_at, uid)
+     VALUES (?, ?, ?, 0, ?, ?)`,
+    [input.title.trim(), input.eventDate, input.slots, now(), newUid()],
   );
 
   const rows = await db.select<{ id: number }[]>(`SELECT MAX(id) AS id FROM events`);
@@ -117,6 +119,7 @@ export async function updateEvent(id: number, input: EventInput): Promise<void> 
 export async function deleteEvent(id: number): Promise<void> {
   const db = await getDb();
 
+  await recordTombstone("event", await uidOf("events", id));
   await db.execute(`DELETE FROM attendance WHERE event_id = ?`, [id]);
   await db.execute(`DELETE FROM event_slots WHERE event_id = ?`, [id]);
   await db.execute(`DELETE FROM event_signups WHERE event_id = ?`, [id]);

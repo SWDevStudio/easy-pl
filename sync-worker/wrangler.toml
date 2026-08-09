@@ -1,0 +1,8 @@
+name = "easy-pl-sync"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "easy-pl"
+database_id = "ЗАПОЛНИТЬ_ПОСЛЕ_СОЗДАНИЯ_БАЗЫ"

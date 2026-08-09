@@ -1,5 +1,6 @@
 import { clampDebt } from "@/lottery/fairness";
 import { getDb } from "../client";
+import { newUid, recordTombstone, uidOf } from "../uid";
 import { DuplicateError, type Player, type PlayerInput } from "../types";
 
 interface PlayerRow {
@@ -38,8 +39,9 @@ export async function createPlayer(input: PlayerInput): Promise<void> {
   await ensureUniqueName(input.familyName, null);
 
   await db.execute(
-    `INSERT INTO players (family_name, class_id, raid_id, discord, discord_id, joined_at, note, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO players (family_name, class_id, raid_id, discord, discord_id, joined_at, note,
+                          updated_at, uid)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.familyName.trim(),
       input.classId,
@@ -49,6 +51,7 @@ export async function createPlayer(input: PlayerInput): Promise<void> {
       input.joinedAt,
       input.note,
       now(),
+      newUid(),
     ],
   );
 }
@@ -98,6 +101,7 @@ export async function setDebt(id: number, debt: number): Promise<number> {
 export async function deletePlayer(id: number): Promise<void> {
   const db = await getDb();
 
+  await recordTombstone("player", await uidOf("players", id));
   await db.execute(`DELETE FROM attendance WHERE player_id = ?`, [id]);
   await db.execute(`DELETE FROM event_slots WHERE player_id = ?`, [id]);
   await db.execute(`DELETE FROM event_signups WHERE player_id = ?`, [id]);

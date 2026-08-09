@@ -1,4 +1,5 @@
 import { getDb } from "../client";
+import { newUid, recordTombstone, uidOf } from "../uid";
 import { ClassInUseError, DuplicateError, type ClassPath, type GameClass, type GameClassInput } from "../types";
 
 interface ClassRow {
@@ -46,9 +47,9 @@ export async function createClass(input: GameClassInput): Promise<void> {
   );
 
   await db.execute(
-    `INSERT INTO classes (base_name, path, display_name, is_active, sort_order)
-     VALUES (?, ?, ?, ?, ?)`,
-    [input.baseName.trim(), input.path, displayName, input.isActive ? 1 : 0, next],
+    `INSERT INTO classes (base_name, path, display_name, is_active, sort_order, uid, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [input.baseName.trim(), input.path, displayName, input.isActive ? 1 : 0, next, newUid(), now()],
   );
 }
 
@@ -59,15 +60,23 @@ export async function updateClass(id: number, input: GameClassInput): Promise<vo
   await ensureUnique(input.baseName, input.path, id);
 
   await db.execute(
-    `UPDATE classes SET base_name = ?, path = ?, display_name = ?, is_active = ? WHERE id = ?`,
-    [input.baseName.trim(), input.path, displayName, input.isActive ? 1 : 0, id],
+    `UPDATE classes SET base_name = ?, path = ?, display_name = ?, is_active = ?, updated_at = ? WHERE id = ?`,
+    [input.baseName.trim(), input.path, displayName, input.isActive ? 1 : 0, now(), id],
   );
 }
 
 export async function setClassActive(id: number, isActive: boolean): Promise<void> {
   const db = await getDb();
 
-  await db.execute(`UPDATE classes SET is_active = ? WHERE id = ?`, [isActive ? 1 : 0, id]);
+  await db.execute(`UPDATE classes SET is_active = ?, updated_at = ? WHERE id = ?`, [
+    isActive ? 1 : 0,
+    now(),
+    id,
+  ]);
+}
+
+function now(): string {
+  return new Date().toISOString();
 }
 
 export async function deleteClass(id: number): Promise<void> {
@@ -79,6 +88,7 @@ export async function deleteClass(id: number): Promise<void> {
 
   if (count > 0) throw new ClassInUseError(count);
 
+  await recordTombstone("class", await uidOf("classes", id));
   await db.execute(`DELETE FROM classes WHERE id = ?`, [id]);
 }
 

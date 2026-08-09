@@ -1,4 +1,5 @@
 mod discord;
+mod sync;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -14,6 +15,10 @@ pub fn run() {
             discord::discord_list_channels,
             discord::discord_list_messages,
             discord::discord_reaction_users,
+            sync::sync_save_token,
+            sync::sync_clear_token,
+            sync::sync_has_token,
+            sync::sync_request,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

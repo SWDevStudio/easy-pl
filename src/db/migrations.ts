@@ -209,7 +209,62 @@ export const MIGRATIONS: Migration[] = [
       { sql: `CREATE INDEX IF NOT EXISTS idx_attendance_player ON attendance (player_id)` },
     ],
   },
+  {
+    version: 10,
+    name: "sync-identity",
+    statements: [
+      ...syncColumns("classes"),
+      ...syncColumns("raids"),
+      ...syncColumns("players"),
+      ...syncColumns("events"),
+      {
+        sql: `CREATE TABLE IF NOT EXISTS tombstones (
+          entity     TEXT NOT NULL,
+          uid        TEXT NOT NULL,
+          deleted_at TEXT NOT NULL,
+          PRIMARY KEY (entity, uid)
+        )`,
+      },
+    ],
+  },
 ];
+
+function naturalUid(table: string): string {
+  if (table === "classes") return `'class:' || base_name || ':' || path`;
+  if (table === "raids") return `'raid:' || name`;
+  if (table === "players") return `'player:' || family_name`;
+
+  return `lower(hex(randomblob(16)))`;
+}
+
+function syncColumns(table: string): MigrationStatement[] {
+  const statements: MigrationStatement[] = [
+    {
+      sql: `ALTER TABLE ${table} ADD COLUMN uid TEXT`,
+      skipWhen: { sql: `SELECT 1 FROM pragma_table_info('${table}') WHERE name = 'uid'` },
+    },
+    {
+      sql: `UPDATE ${table} SET uid = ${naturalUid(table)} WHERE uid IS NULL OR uid = ''`,
+    },
+    { sql: `CREATE UNIQUE INDEX IF NOT EXISTS idx_${table}_uid ON ${table} (uid)` },
+  ];
+
+  if (table === "classes" || table === "raids") {
+    statements.splice(
+      1,
+      0,
+      {
+        sql: `ALTER TABLE ${table} ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''`,
+        skipWhen: { sql: `SELECT 1 FROM pragma_table_info('${table}') WHERE name = 'updated_at'` },
+      },
+      {
+        sql: `UPDATE ${table} SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE updated_at = ''`,
+      },
+    );
+  }
+
+  return statements;
+}
 
 export async function runMigrations(db: SqlExecutor): Promise<number> {
   await db.execute(`CREATE TABLE IF NOT EXISTS _migrations (

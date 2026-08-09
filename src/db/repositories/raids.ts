@@ -1,4 +1,5 @@
 import { getDb } from "../client";
+import { newUid, recordTombstone, uidOf } from "../uid";
 import { DuplicateError, RaidInUseError, type Raid, type RaidInput } from "../types";
 
 interface RaidRow {
@@ -27,11 +28,10 @@ export async function createRaid(input: RaidInput): Promise<void> {
     `SELECT COALESCE(MAX(sort_order), 0) + 10 AS next FROM raids`,
   );
 
-  await db.execute(`INSERT INTO raids (name, is_active, sort_order) VALUES (?, ?, ?)`, [
-    input.name.trim(),
-    input.isActive ? 1 : 0,
-    next,
-  ]);
+  await db.execute(
+    `INSERT INTO raids (name, is_active, sort_order, uid, updated_at) VALUES (?, ?, ?, ?, ?)`,
+    [input.name.trim(), input.isActive ? 1 : 0, next, newUid(), now()],
+  );
 }
 
 export async function updateRaid(id: number, input: RaidInput): Promise<void> {
@@ -39,9 +39,10 @@ export async function updateRaid(id: number, input: RaidInput): Promise<void> {
 
   await ensureUnique(input.name, id);
 
-  await db.execute(`UPDATE raids SET name = ?, is_active = ? WHERE id = ?`, [
+  await db.execute(`UPDATE raids SET name = ?, is_active = ?, updated_at = ? WHERE id = ?`, [
     input.name.trim(),
     input.isActive ? 1 : 0,
+    now(),
     id,
   ]);
 }
@@ -49,7 +50,15 @@ export async function updateRaid(id: number, input: RaidInput): Promise<void> {
 export async function setRaidActive(id: number, isActive: boolean): Promise<void> {
   const db = await getDb();
 
-  await db.execute(`UPDATE raids SET is_active = ? WHERE id = ?`, [isActive ? 1 : 0, id]);
+  await db.execute(`UPDATE raids SET is_active = ?, updated_at = ? WHERE id = ?`, [
+    isActive ? 1 : 0,
+    now(),
+    id,
+  ]);
+}
+
+function now(): string {
+  return new Date().toISOString();
 }
 
 export async function deleteRaid(id: number): Promise<void> {
@@ -61,6 +70,7 @@ export async function deleteRaid(id: number): Promise<void> {
 
   if (count > 0) throw new RaidInUseError(count);
 
+  await recordTombstone("raid", await uidOf("raids", id));
   await db.execute(`DELETE FROM raids WHERE id = ?`, [id]);
 }
 
