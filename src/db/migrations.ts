@@ -249,6 +249,24 @@ export const MIGRATIONS: Migration[] = [
       },
     ],
   },
+  {
+    version: 12,
+    name: "stamp-repair",
+    statements: [
+      {
+        sql: `UPDATE classes SET uid = ${naturalUid("classes")}
+              WHERE uid IS NULL OR uid = '' OR uid NOT LIKE 'class:%'`,
+      },
+      {
+        sql: `UPDATE raids SET uid = ${naturalUid("raids")}
+              WHERE uid IS NULL OR uid = '' OR uid NOT LIKE 'raid:%'`,
+      },
+      ...["classes", "raids", "players", "events"].map((table) => ({
+        sql: `UPDATE ${table} SET updated_at = ? WHERE updated_at IS NULL OR updated_at = ''`,
+        params: [LEGACY_STAMP],
+      })),
+    ],
+  },
 ];
 
 function naturalUid(table: string): string {

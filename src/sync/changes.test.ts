@@ -409,6 +409,30 @@ describe("синхронизация изменений", () => {
     );
   });
 
+  it("чинит справочник, доставшийся от промежуточной версии", async () => {
+    source.db.prepare("UPDATE classes SET uid = lower(hex(randomblob(16))), updated_at = ''").run();
+    source.db.prepare("INSERT INTO raids (name, uid, updated_at) VALUES ('СФ', 'случайный', '')").run();
+    source.db.prepare("DELETE FROM _migrations WHERE version = 12").run();
+
+    await runMigrations(source.sql);
+
+    const bad = scalar(source.db, "SELECT COUNT(*) FROM classes WHERE updated_at = '' OR uid NOT LIKE 'class:%'");
+
+    expect(bad).toBe(0);
+    expect(scalar(source.db, "SELECT uid FROM raids WHERE name = 'СФ'")).toBe("raid:СФ");
+  });
+
+  it("одна битая отметка не валит весь обмен", async () => {
+    source.db.prepare("UPDATE classes SET updated_at = '' WHERE id = 1").run();
+    source.db.prepare("UPDATE raids SET updated_at = '2026-08-09' WHERE 1").run();
+
+    const changes = await collectChanges(source.sql, null);
+    const iso = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+
+    expect(changes.length).toBeGreaterThan(0);
+    expect(changes.filter((item) => !iso.test(item.updatedAt))).toEqual([]);
+  });
+
   it("все отметки времени в выгрузке — полный ISO с Z", async () => {
     const changes = await collectChanges(source.sql, null);
     const iso = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;

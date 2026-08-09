@@ -91,13 +91,13 @@ export async function collectChanges(db: Sql, since: string | null): Promise<Cha
   );
 
   const changes: Change[] = [
-    ...classes.map((row) => toChange("class", row.uid, row.updated_at, classData(row))),
-    ...raids.map((row) => toChange("raid", row.uid, row.updated_at, raidData(row))),
-    ...players.map((row) => toChange("player", row.uid, row.updated_at, playerData(row))),
+    ...classes.map((row) => toChange("class", row.uid, stamp(row.updated_at), classData(row))),
+    ...raids.map((row) => toChange("raid", row.uid, stamp(row.updated_at), raidData(row))),
+    ...players.map((row) => toChange("player", row.uid, stamp(row.updated_at), playerData(row))),
   ];
 
   for (const event of events) {
-    changes.push(toChange("event", event.uid, event.updated_at, await eventData(db, event)));
+    changes.push(toChange("event", event.uid, stamp(event.updated_at), await eventData(db, event)));
   }
 
   const tombstones = await db.select<{ entity: string; uid: string; deleted_at: string }[]>(
@@ -108,7 +108,13 @@ export async function collectChanges(db: Sql, since: string | null): Promise<Cha
   for (const row of tombstones) {
     if (!isEntity(row.entity)) continue;
 
-    changes.push({ entity: row.entity, uid: row.uid, updatedAt: row.deleted_at, deleted: true, data: null });
+    changes.push({
+      entity: row.entity,
+      uid: row.uid,
+      updatedAt: stamp(row.deleted_at),
+      deleted: true,
+      data: null,
+    });
   }
 
   return changes;
@@ -536,6 +542,12 @@ function tableOf(entity: Change["entity"]): string {
   if (entity === "player") return "players";
 
   return "events";
+}
+
+const ISO_STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+
+function stamp(value: string | null): string {
+  return value !== null && ISO_STAMP.test(value) ? value : LEGACY_STAMP;
 }
 
 function isEntity(value: string): value is Change["entity"] {
