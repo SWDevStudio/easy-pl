@@ -1,0 +1,186 @@
+@import "@fontsource-variable/inter";
+@import "tailwindcss";
+@plugin "daisyui";
+
+@plugin "daisyui/theme" {
+  name: "bdo";
+  default: true;
+  color-scheme: dark;
+
+  --color-base-100: #241f17;
+  --color-base-200: #1a1610;
+  --color-base-300: #332b20;
+  --color-base-content: #ddd4c1;
+
+  --color-primary: #cdaa66;
+  --color-primary-content: #1a1610;
+
+  --color-secondary: #7a5c3a;
+  --color-secondary-content: #f0e6d2;
+
+  --color-accent: #a8453a;
+  --color-accent-content: #f5e9e2;
+
+  --color-neutral: #332b20;
+  --color-neutral-content: #ddd4c1;
+
+  --color-info: #6d93b0;
+  --color-info-content: #0f1418;
+  --color-success: #8aa85c;
+  --color-success-content: #101408;
+  --color-warning: #d7a03c;
+  --color-warning-content: #1a1204;
+  --color-error: #c05248;
+  --color-error-content: #1a0b09;
+
+  --radius-selector: 0.125rem;
+  --radius-field: 0.1875rem;
+  --radius-box: 0.25rem;
+  --size-selector: 0.28125rem;
+  --size-field: 0.28125rem;
+  --border: 1px;
+  --depth: 1;
+  --noise: 0;
+}
+
+@theme {
+  --font-sans: "Inter Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Trajan Pro", Georgia, "Times New Roman", serif;
+  --color-muted: #a1907a;
+}
+
+:root {
+  font-size: 16px;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.6;
+  letter-spacing: 0.005em;
+  background-color: var(--color-base-200);
+  background-image: radial-gradient(
+    ellipse 80% 50% at 50% 0%,
+    color-mix(in oklab, var(--color-primary) 6%, transparent),
+    transparent
+  );
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@layer components {
+  .panel {
+    position: relative;
+    background-color: var(--color-base-100);
+    border: 1px solid color-mix(in oklab, var(--color-primary) 18%, transparent);
+    border-radius: var(--radius-box);
+    box-shadow:
+      inset 0 1px 0 color-mix(in oklab, var(--color-primary) 6%, transparent),
+      0 10px 30px rgb(0 0 0 / 0.35);
+  }
+
+  .panel::before,
+  .panel::after {
+    content: "";
+    position: absolute;
+    width: 0.7rem;
+    height: 0.7rem;
+    border-color: var(--color-primary);
+    opacity: 0.45;
+    pointer-events: none;
+  }
+
+  .panel::before {
+    top: -1px;
+    left: -1px;
+    border-top: 2px solid;
+    border-left: 2px solid;
+  }
+
+  .panel::after {
+    right: -1px;
+    bottom: -1px;
+    border-bottom: 2px solid;
+    border-right: 2px solid;
+  }
+
+  .panel-title {
+    font-family: var(--font-display);
+    font-size: 1.125rem;
+    line-height: 1.4;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-variant-numeric: lining-nums;
+    color: var(--color-primary);
+  }
+
+  .rule {
+    height: 1px;
+    background-image: linear-gradient(
+      to right,
+      transparent,
+      color-mix(in oklab, var(--color-primary) 40%, transparent),
+      transparent
+    );
+  }
+
+  .stat-figure-value {
+    font-family: var(--font-sans);
+    font-size: 1.875rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--color-primary);
+  }
+
+  .table {
+    font-size: 0.9375rem;
+    line-height: 1.5;
+  }
+
+  .table :where(th, td) {
+    padding-block: 0.75rem;
+    padding-inline: 1rem;
+  }
+
+  .table :where(thead th) {
+    font-size: 0.875rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: color-mix(in oklab, var(--color-primary) 75%, var(--color-base-content));
+  }
+
+  .table :where(td) {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  .table :where(tbody tr):hover {
+    background-color: color-mix(in oklab, var(--color-primary) 8%, transparent);
+  }
+
+  .table :where(thead th) {
+    background-color: var(--color-base-100);
+  }
+
+  .row-actions {
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+
+  :where(tr:hover, tr:focus-within) .row-actions {
+    opacity: 1;
+  }
+
+  .input,
+  .select,
+  .btn {
+    font-size: 0.9375rem;
+  }
+}
