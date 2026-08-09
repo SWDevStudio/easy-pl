@@ -3,14 +3,21 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "login": "wrangler login",
-    "db:create": "wrangler d1 create easy-pl",
-    "db:schema": "wrangler d1 execute easy-pl --remote --file=schema.sql",
-    "secret": "wrangler secret put SYNC_TOKEN",
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "secret": "wrangler secret put SYNC_TOKEN"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0"
+    "@cloudflare/workers-types": "^4.20250801.0",
+    "wrangler": "^4.45.0"
+  },
+  "cloudflare": {
+    "label": "easy-pl — синхронизация",
+    "products": ["Workers", "D1"],
+    "bindings": {
+      "SYNC_TOKEN": {
+        "description": "Общий ключ. Придумайте длинную случайную строку — её вводят у себя все, кто пользуется приложением."
+      }
+    }
   }
 }

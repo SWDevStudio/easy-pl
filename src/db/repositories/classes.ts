@@ -82,7 +82,7 @@ function now(): string {
 export async function deleteClass(id: number): Promise<void> {
   const db = await getDb();
   const [{ count }] = await db.select<{ count: number }[]>(
-    `SELECT COUNT(*) AS count FROM players WHERE class_id = ? AND deleted_at IS NULL`,
+    `SELECT COUNT(*) AS count FROM players WHERE class_id = ?`,
     [id],
   );
 

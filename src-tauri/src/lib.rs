@@ -18,6 +18,7 @@ pub fn run() {
             sync::sync_save_token,
             sync::sync_clear_token,
             sync::sync_has_token,
+            sync::sync_get_token,
             sync::sync_request,
         ])
         .run(tauri::generate_context!())

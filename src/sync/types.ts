@@ -8,16 +8,27 @@ export interface Change {
   updatedAt: string;
   deleted: boolean;
   data: Record<string, unknown> | null;
+  revision?: number;
 }
 
 export interface SyncResponse {
   revision: number;
+  hasMore: boolean;
   changes: Change[];
+}
+
+export interface ApplyResult {
+  applied: number;
+  failed: number;
+  deferred: number;
+  cursor: number | null;
 }
 
 export interface SyncReport {
   sent: number;
   received: number;
+  failed: number;
+  deferred: number;
   revision: number;
 }
 

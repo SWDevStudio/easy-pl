@@ -29,6 +29,8 @@ export class MigrationError extends Error {
   }
 }
 
+export const LEGACY_STAMP = "2026-01-01T00:00:00.000Z";
+
 const SCHEMA: MigrationStatement[] = [
   {
     sql: `CREATE TABLE IF NOT EXISTS settings (
@@ -223,6 +225,26 @@ export const MIGRATIONS: Migration[] = [
           uid        TEXT NOT NULL,
           deleted_at TEXT NOT NULL,
           PRIMARY KEY (entity, uid)
+        )`,
+      },
+    ],
+  },
+  {
+    version: 11,
+    name: "sync-hardening",
+    statements: [
+      { sql: `UPDATE classes SET updated_at = ? WHERE uid LIKE 'class:%'`, params: [LEGACY_STAMP] },
+      { sql: `UPDATE raids SET updated_at = ? WHERE uid LIKE 'raid:%'`, params: [LEGACY_STAMP] },
+      {
+        sql: `UPDATE players SET updated_at = ? WHERE updated_at = ?`,
+        params: [`${ROSTER_DATE}T00:00:00.000Z`, ROSTER_DATE],
+      },
+      {
+        sql: `CREATE TABLE IF NOT EXISTS uid_aliases (
+          entity  TEXT NOT NULL,
+          old_uid TEXT NOT NULL,
+          new_uid TEXT NOT NULL,
+          PRIMARY KEY (entity, old_uid)
         )`,
       },
     ],

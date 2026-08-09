@@ -1,5 +1,14 @@
 import type { Sql } from "@/db/client";
-import { APPLY_ORDER, readArray, readBoolean, readNumber, readString, type Change } from "./types";
+import { LEGACY_STAMP } from "@/db/migrations";
+import {
+  APPLY_ORDER,
+  readArray,
+  readBoolean,
+  readNumber,
+  readString,
+  type ApplyResult,
+  type Change,
+} from "./types";
 
 interface ClassRow {
   uid: string;
@@ -105,47 +114,106 @@ export async function collectChanges(db: Sql, since: string | null): Promise<Cha
   return changes;
 }
 
-export async function applyChanges(db: Sql, changes: Change[]): Promise<number> {
-  let applied = 0;
+type Outcome = "applied" | "skipped" | "failed" | "deferred";
+
+export async function applyChanges(db: Sql, changes: Change[]): Promise<ApplyResult> {
+  const outcomes = new Map<Change, Outcome>();
 
   for (const entity of APPLY_ORDER) {
     for (const change of changes.filter((item) => item.entity === entity)) {
-      if (await applyChange(db, change)) applied += 1;
+      outcomes.set(change, await applyChange(db, change));
     }
   }
 
-  return applied;
+  const counted = [...outcomes.values()];
+
+  return {
+    applied: counted.filter((outcome) => outcome === "applied").length,
+    failed: counted.filter((outcome) => outcome === "failed").length,
+    deferred: counted.filter((outcome) => outcome === "deferred").length,
+    cursor: safeCursor(changes, outcomes),
+  };
 }
 
-async function applyChange(db: Sql, change: Change): Promise<boolean> {
+function safeCursor(changes: Change[], outcomes: Map<Change, Outcome>): number | null {
+  const revisions = changes.flatMap((change) =>
+    typeof change.revision === "number" ? [{ change, revision: change.revision }] : [],
+  );
+
+  if (!revisions.length) return null;
+
+  const stuck = revisions
+    .filter((item) => {
+      const outcome = outcomes.get(item.change);
+
+      return outcome === "failed" || outcome === "deferred";
+    })
+    .map((item) => item.revision);
+
+  const floor = stuck.length ? Math.min(...stuck) : Number.POSITIVE_INFINITY;
+  const safe = revisions.filter((item) => item.revision < floor).map((item) => item.revision);
+
+  return safe.length ? Math.max(...safe) : null;
+}
+
+async function applyChange(db: Sql, change: Change): Promise<Outcome> {
+  try {
+    return await applyOne(db, change);
+  } catch {
+    return "failed";
+  }
+}
+
+async function applyOne(db: Sql, change: Change): Promise<Outcome> {
   const table = tableOf(change.entity);
   const existing = await db.select<{ id: number; updated_at: string }[]>(
     `SELECT id, updated_at FROM ${table} WHERE uid = ?`,
     [change.uid],
   );
-  const local = existing[0] ?? (await adoptByNaturalKey(db, change));
+  const own = existing[0];
 
-  if (local && local.updated_at >= change.updatedAt) return false;
+  if (!own) {
+    const buriedAt = await tombstoneAt(db, change.entity, change.uid);
+
+    if (buriedAt !== null && buriedAt >= change.updatedAt) return "skipped";
+  }
+
+  const local = own ?? (await findByNaturalKey(db, change));
+
+  if (local && local.updated_at >= change.updatedAt) return "skipped";
 
   if (change.deleted) {
-    if (!local) return false;
+    await buryLocal(db, change.entity, change.uid, change.updatedAt);
+
+    if (!local) return "skipped";
 
     await removeLocal(db, change.entity, local.id);
 
-    return true;
+    return "applied";
   }
 
-  if (change.data === null) return false;
+  if (change.data === null) return "skipped";
 
-  await upsert(db, change, local?.id ?? null);
+  if (!own && local) await adopt(db, change, local.id);
 
-  return true;
+  return upsert(db, change, local?.id ?? null);
 }
 
-async function upsert(db: Sql, change: Change, localId: number | null): Promise<void> {
-  if (change.entity === "class") return upsertClass(db, change, localId);
-  if (change.entity === "raid") return upsertRaid(db, change, localId);
-  if (change.entity === "player") return upsertPlayer(db, change, localId);
+async function upsert(db: Sql, change: Change, localId: number | null): Promise<Outcome> {
+  if (change.entity === "class") {
+    await upsertClass(db, change, localId);
+    return "applied";
+  }
+
+  if (change.entity === "raid") {
+    await upsertRaid(db, change, localId);
+    return "applied";
+  }
+
+  if (change.entity === "player") {
+    await upsertPlayer(db, change, localId);
+    return "applied";
+  }
 
   return upsertEvent(db, change, localId);
 }
@@ -232,7 +300,9 @@ async function upsertPlayer(db: Sql, change: Change, localId: number | null): Pr
   );
 }
 
-async function upsertEvent(db: Sql, change: Change, localId: number | null): Promise<void> {
+async function upsertEvent(db: Sql, change: Change, localId: number | null): Promise<Outcome> {
+  const roster = await resolveRoster(db, change);
+  const stamp = roster.complete ? change.updatedAt : await previousStamp(db, localId);
   const values = [
     readString(change.data, "title") ?? "",
     readString(change.data, "eventDate") ?? "",
@@ -240,7 +310,7 @@ async function upsertEvent(db: Sql, change: Change, localId: number | null): Pro
     readString(change.data, "seed"),
     readNumber(change.data, "share"),
     readString(change.data, "status") ?? "draft",
-    change.updatedAt,
+    stamp,
   ];
 
   if (localId === null) {
@@ -260,44 +330,95 @@ async function upsertEvent(db: Sql, change: Change, localId: number | null): Pro
   const rows = await db.select<{ id: number }[]>(`SELECT id FROM events WHERE uid = ?`, [change.uid]);
   const eventId = rows[0]?.id;
 
-  if (eventId === undefined) return;
+  if (eventId === undefined) return "failed";
 
-  await replaceChildren(db, eventId, change);
+  await replaceChildren(db, eventId, roster);
+
+  return roster.complete ? "applied" : "deferred";
 }
 
-async function replaceChildren(db: Sql, eventId: number, change: Change): Promise<void> {
+interface ResolvedRoster {
+  complete: boolean;
+  signups: { playerId: number; isPriority: boolean }[];
+  slots: { playerId: number; source: string }[];
+  attendance: { playerId: number; showedUp: boolean; markedAt: string }[];
+}
+
+async function resolveRoster(db: Sql, change: Change): Promise<ResolvedRoster> {
+  const resolved: ResolvedRoster = { complete: true, signups: [], slots: [], attendance: [] };
+
+  for (const raw of readArray(change.data, "signups")) {
+    const playerId = await resolvePlayer(db, raw, resolved);
+    if (playerId === null) continue;
+
+    resolved.signups.push({ playerId, isPriority: readBoolean(raw, "isPriority") });
+  }
+
+  for (const raw of readArray(change.data, "roster")) {
+    const playerId = await resolvePlayer(db, raw, resolved);
+    if (playerId === null) continue;
+
+    resolved.slots.push({ playerId, source: readString(raw, "source") ?? "lottery" });
+  }
+
+  for (const raw of readArray(change.data, "attendance")) {
+    const playerId = await resolvePlayer(db, raw, resolved);
+    if (playerId === null) continue;
+
+    resolved.attendance.push({
+      playerId,
+      showedUp: readBoolean(raw, "showedUp"),
+      markedAt: readString(raw, "markedAt") ?? "",
+    });
+  }
+
+  return resolved;
+}
+
+async function resolvePlayer(db: Sql, raw: unknown, resolved: ResolvedRoster): Promise<number | null> {
+  const uid = readString(raw, "playerUid");
+  const playerId = await idByUid(db, "players", uid);
+
+  if (playerId !== null) return playerId;
+  if (uid !== null && (await tombstoneAt(db, "player", uid)) === null) resolved.complete = false;
+
+  return null;
+}
+
+async function previousStamp(db: Sql, localId: number | null): Promise<string> {
+  if (localId === null) return LEGACY_STAMP;
+
+  const rows = await db.select<{ updated_at: string }[]>(`SELECT updated_at FROM events WHERE id = ?`, [
+    localId,
+  ]);
+
+  return rows[0]?.updated_at ?? LEGACY_STAMP;
+}
+
+async function replaceChildren(db: Sql, eventId: number, roster: ResolvedRoster): Promise<void> {
   await db.execute(`DELETE FROM event_signups WHERE event_id = ?`, [eventId]);
   await db.execute(`DELETE FROM event_slots WHERE event_id = ?`, [eventId]);
   await db.execute(`DELETE FROM attendance WHERE event_id = ?`, [eventId]);
 
-  for (const raw of readArray(change.data, "signups")) {
-    const playerId = await idByUid(db, "players", readString(raw, "playerUid"));
-    if (playerId === null) continue;
-
+  for (const item of roster.signups) {
     await db.execute(`INSERT OR IGNORE INTO event_signups (event_id, player_id, is_priority) VALUES (?, ?, ?)`, [
       eventId,
-      playerId,
-      readBoolean(raw, "isPriority") ? 1 : 0,
+      item.playerId,
+      item.isPriority ? 1 : 0,
     ]);
   }
 
-  for (const raw of readArray(change.data, "roster")) {
-    const playerId = await idByUid(db, "players", readString(raw, "playerUid"));
-    if (playerId === null) continue;
-
+  for (const item of roster.slots) {
     await db.execute(
       `INSERT OR IGNORE INTO event_slots (event_id, player_id, source, reserve_rank) VALUES (?, ?, ?, NULL)`,
-      [eventId, playerId, readString(raw, "source") ?? "lottery"],
+      [eventId, item.playerId, item.source],
     );
   }
 
-  for (const raw of readArray(change.data, "attendance")) {
-    const playerId = await idByUid(db, "players", readString(raw, "playerUid"));
-    if (playerId === null) continue;
-
+  for (const item of roster.attendance) {
     await db.execute(
       `INSERT OR IGNORE INTO attendance (event_id, player_id, showed_up, marked_at) VALUES (?, ?, ?, ?)`,
-      [eventId, playerId, readBoolean(raw, "showedUp") ? 1 : 0, readString(raw, "markedAt") ?? ""],
+      [eventId, item.playerId, item.showedUp ? 1 : 0, item.markedAt],
     );
   }
 }
@@ -323,7 +444,7 @@ async function removeLocal(db: Sql, entity: Change["entity"], localId: number): 
   await db.execute(`DELETE FROM ${tableOf(entity)} WHERE id = ?`, [localId]);
 }
 
-async function adoptByNaturalKey(
+async function findByNaturalKey(
   db: Sql,
   change: Change,
 ): Promise<{ id: number; updated_at: string } | undefined> {
@@ -334,13 +455,41 @@ async function adoptByNaturalKey(
   if (lookup === null) return undefined;
 
   const rows = await db.select<{ id: number; updated_at: string }[]>(lookup.sql, lookup.params);
-  const found = rows[0];
 
-  if (!found) return undefined;
+  return rows[0];
+}
 
-  await db.execute(`UPDATE ${tableOf(change.entity)} SET uid = ? WHERE id = ?`, [change.uid, found.id]);
+async function adopt(db: Sql, change: Change, localId: number): Promise<void> {
+  const table = tableOf(change.entity);
+  const rows = await db.select<{ uid: string | null }[]>(`SELECT uid FROM ${table} WHERE id = ?`, [localId]);
+  const abandoned = rows[0]?.uid;
 
-  return found;
+  await db.execute(`UPDATE ${table} SET uid = ? WHERE id = ?`, [change.uid, localId]);
+
+  if (!abandoned || abandoned === change.uid) return;
+
+  await db.execute(`INSERT OR REPLACE INTO uid_aliases (entity, old_uid, new_uid) VALUES (?, ?, ?)`, [
+    change.entity,
+    abandoned,
+    change.uid,
+  ]);
+}
+
+async function tombstoneAt(db: Sql, entity: string, uid: string): Promise<string | null> {
+  const rows = await db.select<{ deleted_at: string }[]>(
+    `SELECT deleted_at FROM tombstones WHERE entity = ? AND uid = ?`,
+    [entity, uid],
+  );
+
+  return rows[0]?.deleted_at ?? null;
+}
+
+async function buryLocal(db: Sql, entity: string, uid: string, deletedAt: string): Promise<void> {
+  await db.execute(`INSERT OR REPLACE INTO tombstones (entity, uid, deleted_at) VALUES (?, ?, ?)`, [
+    entity,
+    uid,
+    deletedAt,
+  ]);
 }
 
 function naturalKeyLookup(change: Change): { sql: string; params: unknown[] } | null {
@@ -371,7 +520,12 @@ function naturalKeyLookup(change: Change): { sql: string; params: unknown[] } | 
 async function idByUid(db: Sql, table: string, uid: string | null): Promise<number | null> {
   if (uid === null) return null;
 
-  const rows = await db.select<{ id: number }[]>(`SELECT id FROM ${table} WHERE uid = ?`, [uid]);
+  const rows = await db.select<{ id: number }[]>(
+    `SELECT id FROM ${table}
+     WHERE uid = ?
+        OR uid = (SELECT new_uid FROM uid_aliases WHERE old_uid = ?)`,
+    [uid, uid],
+  );
 
   return rows[0]?.id ?? null;
 }

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { Sql } from "@/db/client";
 import { runMigrations } from "@/db/migrations";
 import { applyChanges, collectChanges } from "./changes";
+import type { Change } from "./types";
 
 function bind(values: unknown[]): (string | number | null)[] {
   return values.map((value) => {
@@ -123,7 +124,7 @@ describe("синхронизация изменений", () => {
     const applied = await applyChanges(target.sql, await collectChanges(source.sql, null));
 
     expect(scalar(target.db, "SELECT family_name FROM players WHERE uid = 'player-1'")).toBe("Новая");
-    expect(applied).toBe(0);
+    expect(applied.applied).toBe(0);
   });
 
   it("применяет более свежую запись поверх старой", async () => {
@@ -178,7 +179,241 @@ describe("синхронизация изменений", () => {
     await applyChanges(target.sql, changes);
     const applied = await applyChanges(target.sql, changes);
 
-    expect(applied).toBe(0);
+    expect(applied.applied).toBe(0);
     expect(scalar(target.db, "SELECT COUNT(*) FROM players WHERE uid = 'player-1'")).toBe(1);
+  });
+
+  it("не воскрешает удалённого игрока правкой, пришедшей позже, но сделанной раньше", async () => {
+    target.db
+      .prepare("INSERT INTO tombstones (entity, uid, deleted_at) VALUES ('player', 'player-1', ?)")
+      .run("2026-08-09T10:00:00.000Z");
+
+    const stale: Change[] = [
+      {
+        entity: "player",
+        uid: "player-1",
+        updatedAt: "2026-08-09T09:00:00.000Z",
+        deleted: false,
+        revision: 5,
+        data: { familyName: "Воскресший", joinedAt: "2026-08-01", debt: 0 },
+      },
+    ];
+
+    const result = await applyChanges(target.sql, stale);
+
+    expect(scalar(target.db, "SELECT COUNT(*) FROM players WHERE uid = 'player-1'")).toBe(0);
+    expect(result.applied).toBe(0);
+  });
+
+  it("удаление, пришедшее с чужой машины, оставляет надгробие", async () => {
+    target.db
+      .prepare("INSERT INTO players (family_name, joined_at, updated_at, uid) VALUES (?, ?, ?, ?)")
+      .run("Ушедший", "2026-08-01", "2026-08-09T10:00:00.000Z", "player-1");
+
+    await applyChanges(target.sql, [
+      {
+        entity: "player",
+        uid: "player-1",
+        updatedAt: "2026-08-09T22:00:00.000Z",
+        deleted: true,
+        revision: 7,
+        data: null,
+      },
+    ]);
+
+    expect(
+      scalar(target.db, "SELECT deleted_at FROM tombstones WHERE entity = 'player' AND uid = 'player-1'"),
+    ).toBe("2026-08-09T22:00:00.000Z");
+  });
+
+  it("проигравшая правка не забирает себе чужой uid", async () => {
+    target.db
+      .prepare("INSERT INTO players (family_name, joined_at, updated_at, uid, debt) VALUES (?, ?, ?, ?, ?)")
+      .run("Kalimdor", "2026-08-01", "2026-08-09T20:00:00.000Z", "local-uid", 4);
+
+    const result = await applyChanges(target.sql, [
+      {
+        entity: "player",
+        uid: "remote-uid",
+        updatedAt: "2026-08-09T10:00:00.000Z",
+        deleted: false,
+        revision: 3,
+        data: { familyName: "Kalimdor", joinedAt: "2026-08-01", debt: 0 },
+      },
+    ]);
+
+    expect(scalar(target.db, "SELECT uid FROM players WHERE family_name = 'Kalimdor'")).toBe("local-uid");
+    expect(scalar(target.db, "SELECT debt FROM players WHERE family_name = 'Kalimdor'")).toBe(4);
+    expect(result.applied).toBe(0);
+  });
+
+  it("после присвоения uid старый идентификатор всё ещё находит игрока", async () => {
+    target.db
+      .prepare("INSERT INTO players (family_name, joined_at, updated_at, uid) VALUES (?, ?, ?, ?)")
+      .run("Kalimdor", "2026-08-01", "2026-08-09T10:00:00.000Z", "player:Kalimdor");
+
+    await applyChanges(target.sql, [
+      {
+        entity: "player",
+        uid: "remote-uid",
+        updatedAt: "2026-08-09T20:00:00.000Z",
+        deleted: false,
+        revision: 4,
+        data: { familyName: "Kalimdor", joinedAt: "2026-08-01", debt: 0 },
+      },
+      {
+        entity: "event",
+        uid: "event-1",
+        updatedAt: "2026-08-09T21:00:00.000Z",
+        deleted: false,
+        revision: 5,
+        data: {
+          title: "Осада",
+          eventDate: "2026-08-09",
+          slots: 10,
+          status: "drawn",
+          signups: [{ playerUid: "player:Kalimdor", isPriority: true }],
+          roster: [],
+          attendance: [],
+        },
+      },
+    ]);
+
+    const eventId = Number(scalar(target.db, "SELECT id FROM events WHERE uid = 'event-1'"));
+
+    expect(scalar(target.db, "SELECT uid FROM players WHERE family_name = 'Kalimdor'")).toBe("remote-uid");
+    expect(scalar(target.db, "SELECT COUNT(*) FROM event_signups WHERE event_id = ?", [eventId])).toBe(1);
+  });
+
+  it("откладывает осаду, пока не приехал её участник", async () => {
+    const bundle: Change[] = [
+      {
+        entity: "event",
+        uid: "event-1",
+        updatedAt: "2026-08-09T21:00:00.000Z",
+        deleted: false,
+        revision: 9,
+        data: {
+          title: "Осада",
+          eventDate: "2026-08-09",
+          slots: 10,
+          status: "drawn",
+          signups: [{ playerUid: "player-missing", isPriority: false }],
+          roster: [],
+          attendance: [],
+        },
+      },
+    ];
+
+    const result = await applyChanges(target.sql, bundle);
+
+    expect(result.deferred).toBe(1);
+    expect(result.cursor).toBeNull();
+    expect(scalar(target.db, "SELECT updated_at FROM events WHERE uid = 'event-1'")).not.toBe(
+      "2026-08-09T21:00:00.000Z",
+    );
+  });
+
+  it("двигает курсор только до первой незакрытой правки", async () => {
+    const changes: Change[] = [
+      {
+        entity: "player",
+        uid: "player-1",
+        updatedAt: "2026-08-09T10:00:00.000Z",
+        deleted: false,
+        revision: 10,
+        data: { familyName: "Первый", joinedAt: "2026-08-01", debt: 0 },
+      },
+      {
+        entity: "event",
+        uid: "event-1",
+        updatedAt: "2026-08-09T11:00:00.000Z",
+        deleted: false,
+        revision: 11,
+        data: {
+          title: "Осада",
+          eventDate: "2026-08-09",
+          slots: 10,
+          status: "drawn",
+          signups: [{ playerUid: "player-missing", isPriority: false }],
+          roster: [],
+          attendance: [],
+        },
+      },
+      {
+        entity: "player",
+        uid: "player-2",
+        updatedAt: "2026-08-09T12:00:00.000Z",
+        deleted: false,
+        revision: 12,
+        data: { familyName: "Второй", joinedAt: "2026-08-01", debt: 0 },
+      },
+    ];
+
+    const result = await applyChanges(target.sql, changes);
+
+    expect(result.cursor).toBe(10);
+    expect(result.deferred).toBe(1);
+  });
+
+  it("переименование в занятое имя не роняет весь обмен", async () => {
+    target.db
+      .prepare("INSERT INTO players (family_name, joined_at, updated_at, uid) VALUES (?, ?, ?, ?)")
+      .run("Azeroth", "2026-08-01", "2026-08-09T10:00:00.000Z", "player-a");
+    target.db
+      .prepare("INSERT INTO players (family_name, joined_at, updated_at, uid) VALUES (?, ?, ?, ?)")
+      .run("Kalimdor", "2026-08-01", "2026-08-09T10:00:00.000Z", "player-b");
+
+    const result = await applyChanges(target.sql, [
+      {
+        entity: "player",
+        uid: "player-b",
+        updatedAt: "2026-08-09T20:00:00.000Z",
+        deleted: false,
+        revision: 15,
+        data: { familyName: "Azeroth", joinedAt: "2026-08-01", debt: 0 },
+      },
+      {
+        entity: "player",
+        uid: "player-c",
+        updatedAt: "2026-08-09T21:00:00.000Z",
+        deleted: false,
+        revision: 16,
+        data: { familyName: "Новичок", joinedAt: "2026-08-01", debt: 0 },
+      },
+    ]);
+
+    expect(result.failed).toBe(1);
+    expect(result.cursor).toBeNull();
+    expect(scalar(target.db, "SELECT COUNT(*) FROM players WHERE uid = 'player-c'")).toBe(1);
+  });
+
+  it("справочник классов на двух свежих установках не задваивается", async () => {
+    const changes = await collectChanges(source.sql, null);
+    const before = scalar(target.db, "SELECT COUNT(*) FROM classes");
+
+    await applyChanges(target.sql, changes);
+
+    expect(scalar(target.db, "SELECT COUNT(*) FROM classes")).toBe(before);
+    expect(changes.filter((item) => item.entity === "class").every((item) => item.uid.startsWith("class:"))).toBe(
+      true,
+    );
+  });
+
+  it("сид получает одинаковую отметку времени на любой машине", async () => {
+    expect(scalar(source.db, "SELECT updated_at FROM classes ORDER BY id LIMIT 1")).toBe(
+      scalar(target.db, "SELECT updated_at FROM classes ORDER BY id LIMIT 1"),
+    );
+    expect(scalar(source.db, "SELECT updated_at FROM players ORDER BY id LIMIT 1")).toBe(
+      scalar(target.db, "SELECT updated_at FROM players ORDER BY id LIMIT 1"),
+    );
+  });
+
+  it("все отметки времени в выгрузке — полный ISO с Z", async () => {
+    const changes = await collectChanges(source.sql, null);
+    const iso = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+
+    expect(changes.length).toBeGreaterThan(0);
+    expect(changes.filter((item) => !iso.test(item.updatedAt))).toEqual([]);
   });
 });

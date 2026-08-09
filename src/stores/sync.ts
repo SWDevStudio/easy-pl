@@ -1,7 +1,8 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import * as service from "@/services/sync";
-import { readSyncSettings, resetSyncState, runSync, saveUrl } from "@/sync/run";
+import { decodeConnection, encodeConnection, normalizeUrl, type Connection } from "@/sync/code";
+import { clearUrl, readSyncSettings, resetSyncState, runSync, saveUrl } from "@/sync/run";
 import type { SyncReport } from "@/sync/types";
 
 export const useSyncStore = defineStore("sync", () => {
@@ -13,7 +14,7 @@ export const useSyncStore = defineStore("sync", () => {
   const error = ref<string | null>(null);
   const report = ref<SyncReport | null>(null);
 
-  const isReady = computed(() => tokenSaved.value && url.value.trim().length > 0);
+  const isConnected = computed(() => tokenSaved.value && url.value.length > 0);
 
   async function load() {
     try {
@@ -29,23 +30,34 @@ export const useSyncStore = defineStore("sync", () => {
     }
   }
 
-  async function saveToken(token: string) {
-    return run(async () => {
-      await service.saveToken(token);
-      tokenSaved.value = true;
-    });
+  async function connect(code: string) {
+    return run(() => apply(decodeConnection(code)));
   }
 
-  async function clearToken() {
+  async function connectManually(address: string, token: string) {
+    return run(() => apply({ url: normalizeUrl(address), token: token.trim() }));
+  }
+
+  async function apply(connection: Connection) {
+    if (!connection.token) throw new Error("Ключ пустой");
+
+    await service.saveToken(connection.token);
+    await saveUrl(connection.url);
+    await load();
+
+    report.value = await runSync();
+
+    await load();
+  }
+
+  async function disconnect() {
     return run(async () => {
       await service.clearToken();
-      tokenSaved.value = false;
-    });
-  }
+      await clearUrl();
+      await resetSyncState();
 
-  async function setUrl(value: string) {
-    return run(async () => {
-      await saveUrl(value);
+      report.value = null;
+
       await load();
     });
   }
@@ -53,6 +65,7 @@ export const useSyncStore = defineStore("sync", () => {
   async function sync() {
     return run(async () => {
       report.value = await runSync();
+
       await load();
     });
   }
@@ -60,9 +73,23 @@ export const useSyncStore = defineStore("sync", () => {
   async function forgetProgress() {
     return run(async () => {
       await resetSyncState();
+
       report.value = null;
+
       await load();
     });
+  }
+
+  async function readCode(): Promise<string | null> {
+    try {
+      const token = await service.getToken();
+
+      return encodeConnection({ url: url.value, token });
+    } catch (cause) {
+      error.value = messageOf(cause);
+
+      return null;
+    }
   }
 
   async function run(action: () => Promise<void>): Promise<boolean> {
@@ -88,15 +115,16 @@ export const useSyncStore = defineStore("sync", () => {
     syncedAt,
     tokenSaved,
     isBusy,
-    isReady,
+    isConnected,
     error,
     report,
     load,
-    saveToken,
-    clearToken,
-    setUrl,
+    connect,
+    connectManually,
+    disconnect,
     sync,
     forgetProgress,
+    readCode,
   };
 });
 

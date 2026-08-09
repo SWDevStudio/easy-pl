@@ -41,6 +41,11 @@ pub fn sync_has_token() -> bool {
 }
 
 #[tauri::command]
+pub fn sync_get_token() -> Result<String, String> {
+    token()
+}
+
+#[tauri::command]
 pub async fn sync_request(url: String, payload: String) -> Result<String, String> {
     let endpoint = url.trim().trim_end_matches('/').to_string();
 

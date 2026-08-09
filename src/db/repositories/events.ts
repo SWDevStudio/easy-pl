@@ -134,6 +134,7 @@ export async function setSignup(eventId: number, playerId: number, isSignedUp: b
 
   if (!isSignedUp) {
     await db.execute(`DELETE FROM event_signups WHERE event_id = ? AND player_id = ?`, [eventId, playerId]);
+    await touchEvent(eventId);
     return;
   }
 
@@ -155,6 +156,7 @@ export async function applyFavoritePriority(eventId: number, playerId: number | 
        AND player_id IN (SELECT id FROM players WHERE is_favorite = 1)`,
     params,
   );
+  await touchEvent(eventId);
 }
 
 export async function setPriority(eventId: number, playerId: number, isPriority: boolean): Promise<void> {
@@ -171,6 +173,7 @@ export async function setPriority(eventId: number, playerId: number, isPriority:
     eventId,
     playerId,
   ]);
+  await touchEvent(eventId);
 }
 
 export async function signUpEveryone(eventId: number): Promise<void> {
@@ -189,6 +192,7 @@ export async function clearSignups(eventId: number): Promise<void> {
 
   await ensureDraft(eventId);
   await db.execute(`DELETE FROM event_signups WHERE event_id = ?`, [eventId]);
+  await touchEvent(eventId);
 }
 
 export async function runDraw(eventId: number): Promise<void> {
@@ -255,6 +259,7 @@ export async function setAttendance(
 
   if (showedUp === null) {
     await db.execute(`DELETE FROM attendance WHERE event_id = ? AND player_id = ?`, [eventId, playerId]);
+    await touchEvent(eventId);
     return;
   }
 
@@ -262,6 +267,7 @@ export async function setAttendance(
     `INSERT OR REPLACE INTO attendance (event_id, player_id, showed_up, marked_at) VALUES (?, ?, ?, ?)`,
     [eventId, playerId, showedUp ? 1 : 0, now()],
   );
+  await touchEvent(eventId);
 }
 
 export async function countOccupiedSeats(eventId: number): Promise<number> {
@@ -306,6 +312,7 @@ export async function addToRoster(eventId: number, playerId: number): Promise<vo
     eventId,
     playerId,
   ]);
+  await touchEvent(eventId);
 }
 
 export async function removeFromRoster(eventId: number, playerId: number): Promise<void> {
@@ -316,6 +323,7 @@ export async function removeFromRoster(eventId: number, playerId: number): Promi
 
   await db.execute(`DELETE FROM attendance WHERE event_id = ? AND player_id = ?`, [eventId, playerId]);
   await db.execute(`DELETE FROM event_slots WHERE event_id = ? AND player_id = ?`, [eventId, playerId]);
+  await touchEvent(eventId);
 }
 
 export async function closeEvent(eventId: number): Promise<void> {
@@ -375,6 +383,12 @@ export async function closeEvent(eventId: number): Promise<void> {
   }
 
   await db.execute(`UPDATE events SET status = 'closed', updated_at = ? WHERE id = ?`, [now(), eventId]);
+}
+
+async function touchEvent(eventId: number): Promise<void> {
+  const db = await getDb();
+
+  await db.execute(`UPDATE events SET updated_at = ? WHERE id = ?`, [now(), eventId]);
 }
 
 async function ensureDraft(eventId: number): Promise<void> {
