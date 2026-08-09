@@ -52,12 +52,11 @@ async function copyCode() {
     <div class="flex flex-col gap-5">
       <div v-if="error" class="alert alert-error">{{ error }}</div>
 
-      <div v-if="report" class="alert" :class="isClean ? 'alert-success' : 'alert-warning'">
+      <div v-if="report && !isClean" class="alert alert-warning">
         <div class="flex flex-col gap-1">
-          <span>Отправлено записей: {{ report.sent }}, принято: {{ report.received }}.</span>
           <span v-if="report.deferred" class="text-sm">
-            Отложено осад: {{ report.deferred }} — ждут игроков, которые ещё не доехали. Синхронизируйтесь
-            ещё раз.
+            Отложено осад: {{ report.deferred }} — ждут игроков, которые ещё не доехали. Приедут при
+            следующем обмене.
           </span>
           <span v-if="report.failed" class="text-sm">
             Не удалось применить записей: {{ report.failed }}. Чаще всего это совпавшие имена — проверьте
@@ -75,6 +74,11 @@ async function copyCode() {
 
         <p class="text-muted text-sm">
           Последняя синхронизация: {{ lastSync }} · ревизия сервера {{ revision }}
+        </p>
+
+        <p class="text-muted text-sm">
+          Обмен идёт сам: при запуске, через полминуты после последней правки и при закрытии.
+          Кнопка ниже — когда нужно прямо сейчас. Состояние видно в шапке.
         </p>
 
         <div class="flex flex-wrap items-center gap-2">

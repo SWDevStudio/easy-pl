@@ -1,5 +1,6 @@
 import { getDb } from "@/db/client";
 import { writeSetting } from "@/db/repositories/settings";
+import { withoutTracking } from "@/db/writes";
 import * as service from "@/services/sync";
 import { applyChanges, collectChanges } from "./changes";
 import { readSyncSettings, REVISION_KEY, SYNCED_AT_KEY } from "./settings";
@@ -29,7 +30,7 @@ export async function runSync(): Promise<SyncReport> {
   while ((round < batches.length || pending) && round < MAX_ROUNDS) {
     const payload = batches[round] ?? [];
     const response = await service.exchange(state.url, cursor, payload);
-    const result = await applyChanges(db, response.changes);
+    const result = await withoutTracking(() => applyChanges(db, response.changes));
     const advanced = result.cursor !== null && result.cursor > cursor;
 
     if (advanced && result.cursor !== null) cursor = result.cursor;

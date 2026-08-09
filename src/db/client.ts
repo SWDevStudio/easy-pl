@@ -1,5 +1,6 @@
 import Database from "@tauri-apps/plugin-sql";
 import { runMigrations } from "./migrations";
+import { notifyWrite } from "./writes";
 
 const DB_URL = "sqlite:easy-pl.db";
 
@@ -25,5 +26,20 @@ async function open(): Promise<Sql> {
 
   await runMigrations(db);
 
-  return db;
+  return tracked(db);
+}
+
+function tracked(db: Sql): Sql {
+  return {
+    async execute(query: string, bindValues?: unknown[]) {
+      const result = await db.execute(query, bindValues);
+
+      notifyWrite(query);
+
+      return result;
+    },
+    select<TRows>(query: string, bindValues?: unknown[]) {
+      return db.select<TRows>(query, bindValues);
+    },
+  };
 }

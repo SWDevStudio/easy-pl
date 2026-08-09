@@ -1,10 +1,31 @@
 <script setup lang="ts">
+import { onMounted } from "vue";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import SyncStatusBadge from "@/components/sync/SyncStatusBadge.vue";
+import { UiToaster } from "@/components/ui";
+import { useSyncStore } from "@/stores/sync";
+
 const links = [
   { to: "/events", label: "Осады" },
   { to: "/players", label: "Гильдия" },
   { to: "/stats", label: "Статистика" },
   { to: "/settings", label: "Справочники" },
 ];
+
+const syncStore = useSyncStore();
+
+onMounted(async () => {
+  await syncStore.startAuto();
+
+  const appWindow = getCurrentWindow();
+
+  await appWindow.onCloseRequested(async (event) => {
+    event.preventDefault();
+
+    await syncStore.flushBeforeClose();
+    await appWindow.destroy();
+  });
+});
 </script>
 
 <template>
@@ -24,6 +45,8 @@ const links = [
             {{ link.label }}
           </RouterLink>
         </nav>
+
+        <SyncStatusBadge />
       </div>
       <div class="rule" />
     </header>
@@ -31,5 +54,7 @@ const links = [
     <main class="mx-auto w-full max-w-[100rem] flex-1 px-6 py-6">
       <RouterView />
     </main>
+
+    <UiToaster />
   </div>
 </template>

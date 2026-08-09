@@ -6,5 +6,6 @@ export { default as UiPanel } from "./UiPanel.vue";
 export { default as UiSelect } from "./UiSelect.vue";
 export { default as UiStat } from "./UiStat.vue";
 export { default as UiTable } from "./UiTable.vue";
+export { default as UiToaster } from "./UiToaster.vue";
 export { default as UiTooltip } from "./UiTooltip.vue";
 export type { TableColumn } from "./types";
