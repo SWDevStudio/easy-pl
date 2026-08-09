@@ -4,16 +4,19 @@
   "version": "0.1.0",
   "scripts": {
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --port 8787",
     "secret": "wrangler secret put SYNC_TOKEN"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250801.0",
+    "@cloudflare/workers-types": "^5.20260801.1",
     "wrangler": "^4.45.0"
   },
   "cloudflare": {
     "label": "easy-pl — синхронизация",
-    "products": ["Workers", "D1"],
+    "products": [
+      "Workers",
+      "D1"
+    ],
     "bindings": {
       "SYNC_TOKEN": {
         "description": "Общий ключ. Придумайте длинную случайную строку — её вводят у себя все, кто пользуется приложением."
