@@ -6,7 +6,7 @@ import { UiButton, UiPanel } from "@/components/ui";
 import { useSyncStore } from "@/stores/sync";
 
 const syncStore = useSyncStore();
-const { url, revision, syncedAt, isBusy, isConnected, error, report } = storeToRefs(syncStore);
+const { url, revision, syncedAt, isBusy, isConnected, fromBuild, error, report } = storeToRefs(syncStore);
 const { copy, copied } = useClipboard({ legacy: true });
 
 const code = ref("");
@@ -70,6 +70,7 @@ async function copyCode() {
         <div class="flex flex-wrap items-center gap-3">
           <span class="badge badge-success">Подключено</span>
           <span class="font-mono text-sm break-all">{{ url }}</span>
+          <span v-if="fromBuild" class="badge badge-ghost">Из сборки</span>
         </div>
 
         <p class="text-muted text-sm">

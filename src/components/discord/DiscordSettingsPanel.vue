@@ -10,6 +10,7 @@ const { guildId, emoji, members, membersLoadedAt, bot, guilds, guildName, isBusy
   storeToRefs(discordStore);
 
 const emojiDraft = ref("");
+const guildDraft = ref("");
 const inviteOpened = ref(false);
 
 const membersHint = computed(() => {
@@ -22,6 +23,7 @@ const membersHint = computed(() => {
 onMounted(async () => {
   await discordStore.load();
   emojiDraft.value = emoji.value;
+  guildDraft.value = guildId.value;
   await discordStore.connect();
 });
 
@@ -73,6 +75,7 @@ async function submitEmoji() {
 
         <div class="flex flex-wrap items-center gap-2">
           <UiSelect
+            v-if="guilds.length"
             :model-value="guildId"
             :options="guilds"
             option-value="id"
@@ -81,15 +84,26 @@ async function submitEmoji() {
             placeholder="Выберите сервер"
             searchable
             @update:model-value="(value) => discordStore.saveGuild(String(value ?? ''))"
-          >
-            <template #empty>Бот пока не добавлен ни на один сервер</template>
-          </UiSelect>
+          />
+          <input
+            v-else
+            v-model="guildDraft"
+            class="input w-full max-w-md"
+            placeholder="ID сервера"
+            inputmode="numeric"
+            @change="discordStore.saveGuild(guildDraft)"
+          />
           <UiButton class="btn-ghost" :is-loading="isBusy" @click="discordStore.connect()">Обновить</UiButton>
         </div>
 
         <p v-if="guildName" class="text-success text-sm">Заявки читаются с сервера «{{ guildName }}»</p>
-        <p v-else class="text-muted text-sm">
+        <p v-else-if="guilds.length" class="text-muted text-sm">
           В списке — серверы, на которые бот уже добавлен. Идентификаторы копировать не нужно.
+        </p>
+        <p v-else class="text-muted text-sm">
+          Список серверов появится, когда заработает связь с ботом — тогда ID вводить не придётся. Пока
+          можно вписать его руками: правый клик по серверу в Discord → «Копировать ID сервера» (нужен
+          включённый «Режим разработчика»).
         </p>
       </fieldset>
 

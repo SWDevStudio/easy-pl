@@ -1,6 +1,7 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import * as service from "@/services/sync";
+import { builtInConnection } from "@/config";
 import { decodeConnection, encodeConnection, normalizeUrl, type Connection } from "@/sync/code";
 import { runSync } from "@/sync/run";
 import { clearUrl, readSyncSettings, resetSyncState, saveUrl } from "@/sync/settings";
@@ -16,9 +17,12 @@ export const useSyncStore = defineStore("sync", () => {
   const report = ref<SyncReport | null>(null);
 
   const isConnected = computed(() => tokenSaved.value && url.value.length > 0);
+  const fromBuild = ref(false);
 
   async function load() {
     try {
+      await adoptBuiltIn();
+
       const state = await readSyncSettings();
 
       url.value = state.url;
@@ -28,6 +32,24 @@ export const useSyncStore = defineStore("sync", () => {
       error.value = null;
     } catch (cause) {
       error.value = messageOf(cause);
+    }
+  }
+
+  async function adoptBuiltIn() {
+    const preset = builtInConnection();
+
+    if (!preset.url) return;
+
+    const state = await readSyncSettings();
+
+    if (!state.url) {
+      await saveUrl(preset.url);
+      fromBuild.value = true;
+    }
+
+    if (preset.token && !(await service.hasToken())) {
+      await service.saveToken(preset.token);
+      fromBuild.value = true;
     }
   }
 
@@ -117,6 +139,7 @@ export const useSyncStore = defineStore("sync", () => {
     tokenSaved,
     isBusy,
     isConnected,
+    fromBuild,
     error,
     report,
     load,
