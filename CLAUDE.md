@@ -40,7 +40,8 @@ src/
   utils/        чистые хелперы (cn)
   style.css     Tailwind, daisyUI, тема bdo
 src-tauri/      Rust-часть: команды, конфиг, иконки
-docs/SPEC.md    постановка задачи и алгоритм жеребьёвки
+docs/           GUIDE (использование), SPEC (алгоритм жеребьёвки), ARCHITECTURE,
+                DATABASE, SYNC, RELEASE
 ```
 
 Алиас `@/*` указывает на `src/*` (настроен в `vite.config.ts` и `tsconfig.json`).
