@@ -1,8 +1,8 @@
 [package]
 name = "easy-pl"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+version = "1.0.0"
+description = "Учёт состава и жеребьёвка осад для гильдии"
+authors = ["SWDevStudio"]
 edition = "2021"
 
 [lib]

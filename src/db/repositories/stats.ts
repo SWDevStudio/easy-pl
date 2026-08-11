@@ -78,7 +78,7 @@ export async function listRaidStats(fromDate: string): Promise<RaidStat[]> {
      FROM event_signups s
      JOIN events e ON e.id = s.event_id AND e.status <> 'draft' AND e.event_date >= ?
      JOIN players p ON p.id = s.player_id
-     LEFT JOIN raids r ON r.id = p.raid_id
+     LEFT JOIN raids r ON r.id = COALESCE(s.raid_id, p.raid_id)
      LEFT JOIN event_slots t ON t.event_id = s.event_id AND t.player_id = s.player_id
      LEFT JOIN attendance a ON a.event_id = s.event_id AND a.player_id = s.player_id
      GROUP BY COALESCE(r.id, 0), COALESCE(r.name, 'Без рейда')`,
@@ -130,7 +130,8 @@ export async function listRaidTimeline(fromDate: string): Promise<RaidTimelinePo
      FROM events e
      JOIN event_slots t ON t.event_id = e.id
      JOIN players p ON p.id = t.player_id
-     LEFT JOIN raids r ON r.id = p.raid_id
+     LEFT JOIN event_signups s ON s.event_id = e.id AND s.player_id = t.player_id
+     LEFT JOIN raids r ON r.id = COALESCE(s.raid_id, p.raid_id)
      LEFT JOIN attendance a ON a.event_id = e.id AND a.player_id = t.player_id
      WHERE e.status <> 'draft' AND e.event_date >= ?
      GROUP BY e.id, e.event_date, COALESCE(r.id, 0)
