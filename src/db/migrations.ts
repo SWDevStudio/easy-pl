@@ -267,6 +267,55 @@ export const MIGRATIONS: Migration[] = [
       })),
     ],
   },
+  {
+    version: 13,
+    name: "event-raid-quotas",
+    statements: [
+      {
+        sql: `CREATE TABLE IF NOT EXISTS event_quotas (
+          event_id INTEGER NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+          raid_id  INTEGER NOT NULL DEFAULT 0,
+          slots    INTEGER NOT NULL DEFAULT 0 CHECK (slots >= 0),
+          share    REAL,
+          PRIMARY KEY (event_id, raid_id)
+        )`,
+      },
+      {
+        sql: `INSERT OR IGNORE INTO event_quotas (event_id, raid_id, slots)
+              SELECT t.event_id, COALESCE(p.raid_id, 0), COUNT(*)
+              FROM event_slots t JOIN players p ON p.id = t.player_id
+              WHERE t.reserve_rank IS NULL
+              GROUP BY t.event_id, COALESCE(p.raid_id, 0)`,
+      },
+      {
+        sql: `INSERT OR IGNORE INTO event_quotas (event_id, raid_id, slots)
+              SELECT e.id, 0, e.slots FROM events e
+              WHERE e.slots > 0
+                AND NOT EXISTS (SELECT 1 FROM event_quotas q WHERE q.event_id = e.id)`,
+      },
+      {
+        sql: `UPDATE event_quotas
+              SET share = (SELECT e.share FROM events e WHERE e.id = event_quotas.event_id)
+              WHERE share IS NULL`,
+      },
+      {
+        sql: `UPDATE events
+              SET slots = (SELECT COALESCE(SUM(q.slots), 0) FROM event_quotas q WHERE q.event_id = events.id)`,
+      },
+    ],
+  },
+  {
+    version: 14,
+    name: "signup-raid",
+    statements: [
+      {
+        sql: `ALTER TABLE event_signups ADD COLUMN raid_id INTEGER REFERENCES raids (id)`,
+        skipWhen: {
+          sql: `SELECT 1 FROM pragma_table_info('event_signups') WHERE name = 'raid_id'`,
+        },
+      },
+    ],
+  },
 ];
 
 function naturalUid(table: string): string {

@@ -5,10 +5,12 @@ import { storeToRefs } from "pinia";
 import EventFormModal from "@/components/events/EventFormModal.vue";
 import { UiButton, UiConfirm, UiIconButton, UiPanel, UiTable, type TableColumn } from "@/components/ui";
 import { useEventsStore } from "@/stores/events";
+import { useRaidsStore } from "@/stores/raids";
 import type { EventInput, EventStatus, GuildEvent } from "@/db/types";
 
 const router = useRouter();
 const eventsStore = useEventsStore();
+const raidsStore = useRaidsStore();
 const { items, isLoading, isBusy, error } = storeToRefs(eventsStore);
 
 const removing = ref<GuildEvent | null>(null);
@@ -25,13 +27,16 @@ const columns: TableColumn<GuildEvent>[] = [
   { key: "eventDate", label: "Дата", width: "9rem" },
   { key: "title", label: "Название" },
   { key: "status", label: "Статус", width: "12rem" },
-  { key: "slots", label: "Слотов", headerClass: "text-right", class: "text-right", width: "7rem" },
+  { key: "slots", label: "Мест", headerClass: "text-right", class: "text-right", width: "7rem" },
   { key: "signedUp", label: "Заявились", headerClass: "text-right", class: "text-right", width: "8rem" },
   { key: "attended", label: "Пришли", headerClass: "text-right", class: "text-right", width: "8rem" },
   { key: "actions", label: "", headerClass: "text-right", class: "text-right", width: "5rem" },
 ];
 
-onMounted(() => eventsStore.load());
+onMounted(() => {
+  eventsStore.load();
+  if (!raidsStore.hasLoaded) raidsStore.load();
+});
 
 async function create(input: EventInput) {
   const id = await eventsStore.create(input);

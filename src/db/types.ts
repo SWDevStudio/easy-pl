@@ -71,17 +71,34 @@ export interface GuildEvent {
   attended: number;
 }
 
+export interface RaidQuota {
+  raidId: number | null;
+  slots: number;
+}
+
+export interface EventRaidSeats {
+  raidId: number | null;
+  raidName: string | null;
+  slots: number;
+  signedUp: number;
+  priority: number;
+  taken: number;
+  occupied: number;
+}
+
 export interface EventInput {
   title: string;
   eventDate: string;
-  slots: number;
+  quotas: RaidQuota[];
 }
 
 export interface EventParticipant {
   playerId: number;
   familyName: string;
   className: string | null;
+  raidId: number | null;
   raidName: string | null;
+  isRaidGuest: boolean;
   debt: number;
   isFavorite: boolean;
   isSignedUp: boolean;

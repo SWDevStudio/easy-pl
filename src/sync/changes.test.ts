@@ -113,6 +113,154 @@ describe("синхронизация изменений", () => {
     expect(scalar(target.db, "SELECT showed_up FROM attendance WHERE event_id = ?", [targetEvent])).toBe(1);
   });
 
+  it("переносит места по рейдам вместе с осадой", async () => {
+    source.db
+      .prepare("INSERT INTO raids (name, updated_at, uid) VALUES (?, ?, ?)")
+      .run("Альфа", "2026-08-09T10:00:00Z", "raid-1");
+    const raidId = Number(scalar(source.db, "SELECT id FROM raids WHERE uid = 'raid-1'"));
+
+    source.db
+      .prepare(
+        `INSERT INTO events (title, event_date, slots, status, updated_at, uid) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("Осада", "2026-08-09", 5, "drawn", "2026-08-09T20:00:00Z", "event-1");
+    const eventId = Number(scalar(source.db, "SELECT id FROM events WHERE uid = 'event-1'"));
+
+    source.db
+      .prepare("INSERT INTO event_quotas (event_id, raid_id, slots, share) VALUES (?, ?, ?, ?)")
+      .run(eventId, raidId, 3, 0.5);
+    source.db
+      .prepare("INSERT INTO event_quotas (event_id, raid_id, slots, share) VALUES (?, 0, ?, ?)")
+      .run(eventId, 2, 0.25);
+
+    await applyChanges(target.sql, await collectChanges(source.sql, null));
+
+    const targetEvent = Number(scalar(target.db, "SELECT id FROM events WHERE uid = 'event-1'"));
+    const targetRaid = Number(scalar(target.db, "SELECT id FROM raids WHERE uid = 'raid-1'"));
+
+    expect(
+      scalar(target.db, "SELECT slots FROM event_quotas WHERE event_id = ? AND raid_id = ?", [
+        targetEvent,
+        targetRaid,
+      ]),
+    ).toBe(3);
+    expect(
+      scalar(target.db, "SELECT share FROM event_quotas WHERE event_id = ? AND raid_id = 0", [targetEvent]),
+    ).toBe(0.25);
+  });
+
+  it("переносит разовый рейд заявки, не трогая рейд игрока", async () => {
+    source.db
+      .prepare("INSERT INTO raids (name, updated_at, uid) VALUES (?, ?, ?)")
+      .run("Альфа", "2026-08-09T10:00:00Z", "raid-1");
+    const raidId = Number(scalar(source.db, "SELECT id FROM raids WHERE uid = 'raid-1'"));
+
+    source.db
+      .prepare("INSERT INTO players (family_name, joined_at, updated_at, uid) VALUES (?, ?, ?, ?)")
+      .run("Гость", "2026-08-01", "2026-08-09T12:00:00Z", "player-1");
+    const playerId = Number(scalar(source.db, "SELECT id FROM players WHERE uid = 'player-1'"));
+
+    source.db
+      .prepare(`INSERT INTO events (title, event_date, slots, status, updated_at, uid) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run("Осада", "2026-08-09", 1, "draft", "2026-08-09T20:00:00Z", "event-1");
+    const eventId = Number(scalar(source.db, "SELECT id FROM events WHERE uid = 'event-1'"));
+
+    source.db
+      .prepare("INSERT INTO event_signups (event_id, player_id, is_priority, raid_id) VALUES (?, ?, 1, ?)")
+      .run(eventId, playerId, raidId);
+
+    await applyChanges(target.sql, await collectChanges(source.sql, null));
+
+    const targetEvent = Number(scalar(target.db, "SELECT id FROM events WHERE uid = 'event-1'"));
+    const targetRaid = Number(scalar(target.db, "SELECT id FROM raids WHERE uid = 'raid-1'"));
+
+    expect(scalar(target.db, "SELECT raid_id FROM event_signups WHERE event_id = ?", [targetEvent])).toBe(
+      targetRaid,
+    );
+    expect(scalar(target.db, "SELECT raid_id FROM players WHERE uid = 'player-1'")).toBe(null);
+  });
+
+  it("откладывает осаду, пока не приехал разовый рейд заявки", async () => {
+    target.db
+      .prepare("INSERT INTO players (family_name, joined_at, updated_at, uid) VALUES (?, ?, ?, ?)")
+      .run("Гость", "2026-08-01", "2026-08-09T12:00:00Z", "player-1");
+
+    const result = await applyChanges(target.sql, [
+      {
+        entity: "event",
+        uid: "event-1",
+        updatedAt: "2026-08-09T21:00:00.000Z",
+        deleted: false,
+        revision: 9,
+        data: {
+          title: "Осада",
+          eventDate: "2026-08-09",
+          slots: 1,
+          status: "draft",
+          quotas: [],
+          signups: [{ playerUid: "player-1", isPriority: true, raidUid: "raid-missing" }],
+          roster: [],
+          attendance: [],
+        },
+      },
+    ]);
+
+    expect(result.deferred).toBe(1);
+    expect(result.cursor).toBeNull();
+  });
+
+  it("откладывает осаду, пока не приехал рейд, которому выделены места", async () => {
+    const result = await applyChanges(target.sql, [
+      {
+        entity: "event",
+        uid: "event-1",
+        updatedAt: "2026-08-09T21:00:00.000Z",
+        deleted: false,
+        revision: 9,
+        data: {
+          title: "Осада",
+          eventDate: "2026-08-09",
+          slots: 3,
+          status: "draft",
+          quotas: [{ raidUid: "raid-missing", slots: 3, share: null }],
+          signups: [],
+          roster: [],
+          attendance: [],
+        },
+      },
+    ]);
+
+    expect(result.deferred).toBe(1);
+    expect(result.cursor).toBeNull();
+  });
+
+  it("раскладывает осаду от старого клиента в группу без рейда", async () => {
+    await applyChanges(target.sql, [
+      {
+        entity: "event",
+        uid: "event-1",
+        updatedAt: "2026-08-09T21:00:00.000Z",
+        deleted: false,
+        revision: 9,
+        data: {
+          title: "Осада",
+          eventDate: "2026-08-09",
+          slots: 4,
+          status: "draft",
+          signups: [],
+          roster: [],
+          attendance: [],
+        },
+      },
+    ]);
+
+    const eventId = Number(scalar(target.db, "SELECT id FROM events WHERE uid = 'event-1'"));
+
+    expect(
+      scalar(target.db, "SELECT slots FROM event_quotas WHERE event_id = ? AND raid_id = 0", [eventId]),
+    ).toBe(4);
+  });
+
   it("не затирает более свежую запись старой", async () => {
     source.db
       .prepare("INSERT INTO players (family_name, joined_at, updated_at, uid, debt) VALUES (?, ?, ?, ?, ?)")

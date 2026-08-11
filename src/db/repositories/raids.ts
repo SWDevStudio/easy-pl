@@ -1,6 +1,7 @@
 import { getDb } from "../client";
 import { newUid, recordTombstone, uidOf } from "../uid";
 import { DuplicateError, RaidInUseError, type Raid, type RaidInput } from "../types";
+import { dropRaidFromEvents } from "./events";
 
 interface RaidRow {
   id: number;
@@ -71,6 +72,7 @@ export async function deleteRaid(id: number): Promise<void> {
   if (count > 0) throw new RaidInUseError(count);
 
   await recordTombstone("raid", await uidOf("raids", id));
+  await dropRaidFromEvents(id);
   await db.execute(`DELETE FROM raids WHERE id = ?`, [id]);
 }
 

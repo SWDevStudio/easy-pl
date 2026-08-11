@@ -46,8 +46,14 @@ function countOf(db: DatabaseSync, table: string, where = ""): number {
   return typeof count === "number" ? count : -1;
 }
 
-function insert(db: DatabaseSync, sql: string, params: (string | number)[]): number {
+function insert(db: DatabaseSync, sql: string, params: (string | number | null)[]): number {
   return Number(db.prepare(sql).run(...params).lastInsertRowid);
+}
+
+function scalar(db: DatabaseSync, sql: string, params: (string | number)[] = []): unknown {
+  const rows = db.prepare(sql).all(...params);
+
+  return rows[0] === undefined ? undefined : Object.values(rows[0])[0];
 }
 
 const EXPECTED_TABLES = [
@@ -55,6 +61,7 @@ const EXPECTED_TABLES = [
   "attendance",
   "classes",
   "draw_log",
+  "event_quotas",
   "event_signups",
   "event_slots",
   "events",
@@ -177,6 +184,39 @@ describe("runMigrations", () => {
     db.close();
   });
 
+  it("заводит у заявки разовый рейд", async () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+
+    await runMigrations(createExecutor(db));
+
+    const raidId = insert(db, "INSERT INTO raids (name, updated_at, uid) VALUES (?, ?, ?)", [
+      "Альфа",
+      "2026-01-01T00:00:00.000Z",
+      "raid:Альфа",
+    ]);
+    const eventId = insert(
+      db,
+      "INSERT INTO events (title, event_date, slots, updated_at) VALUES (?, ?, ?, ?)",
+      ["Осада", "2026-08-09", 1, "2026-08-09T00:00:00.000Z"],
+    );
+    const playerId = insert(db, "INSERT INTO players (family_name, joined_at, updated_at) VALUES (?, ?, ?)", [
+      "Kalimdor",
+      "2026-08-09",
+      "2026-08-09T00:00:00.000Z",
+    ]);
+
+    db.prepare("INSERT INTO event_signups (event_id, player_id, raid_id) VALUES (?, ?, ?)").run(
+      eventId,
+      playerId,
+      raidId,
+    );
+
+    expect(scalar(db, "SELECT raid_id FROM event_signups WHERE event_id = ?", [eventId])).toBe(raidId);
+    expect(scalar(db, "SELECT raid_id FROM players WHERE id = ?", [playerId])).toBe(null);
+    db.close();
+  });
+
   it("засеивает состав гильдии без классов и без дублей", async () => {
     const db = new DatabaseSync(":memory:");
     const executor = createExecutor(db);
@@ -236,6 +276,75 @@ describe("runMigrations", () => {
 
     await expect(runMigrations(executor)).resolves.toBeGreaterThan(0);
     db.close();
+  });
+
+  it("раскладывает места разыгранной осады по рейдам", async () => {
+    const db = new DatabaseSync(":memory:");
+    const executor = createExecutor(db);
+
+    await runMigrations(executor);
+
+    const raidId = insert(db, "INSERT INTO raids (name, updated_at, uid) VALUES (?, ?, ?)", [
+      "Альфа",
+      "2026-01-01T00:00:00.000Z",
+      "raid:Альфа",
+    ]);
+    const eventId = insert(
+      db,
+      `INSERT INTO events (title, event_date, slots, status, share, updated_at, uid)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ["Осада", "2026-08-09", 5, "drawn", 0.25, "2026-08-09T20:00:00.000Z", "event-legacy"],
+    );
+    const inRaid = insert(
+      db,
+      "INSERT INTO players (family_name, joined_at, updated_at, raid_id) VALUES (?, ?, ?, ?)",
+      ["Alpha", "2026-08-09", "2026-08-09", raidId],
+    );
+    const loner = insert(db, "INSERT INTO players (family_name, joined_at, updated_at) VALUES (?, ?, ?)", [
+      "Loner",
+      "2026-08-09",
+      "2026-08-09",
+    ]);
+
+    for (const playerId of [inRaid, loner]) {
+      db.prepare("INSERT INTO event_slots (event_id, player_id, source) VALUES (?, ?, 'lottery')").run(
+        eventId,
+        playerId,
+      );
+    }
+
+    db.prepare("DELETE FROM event_quotas").run();
+    db.prepare("DELETE FROM _migrations WHERE version = 13").run();
+
+    await runMigrations(executor);
+
+    expect(countOf(db, "event_quotas", `event_id = ${eventId}`)).toBe(2);
+    expect(scalar(db, "SELECT slots FROM event_quotas WHERE event_id = ? AND raid_id = ?", [eventId, raidId])).toBe(1);
+    expect(scalar(db, "SELECT slots FROM event_quotas WHERE event_id = ? AND raid_id = 0", [eventId])).toBe(1);
+    expect(scalar(db, "SELECT share FROM event_quotas WHERE event_id = ? AND raid_id = 0", [eventId])).toBe(0.25);
+    expect(scalar(db, "SELECT slots FROM events WHERE id = ?", [eventId])).toBe(2);
+  });
+
+  it("отдаёт места старого черновика группе без рейда", async () => {
+    const db = new DatabaseSync(":memory:");
+    const executor = createExecutor(db);
+
+    await runMigrations(executor);
+
+    const eventId = insert(
+      db,
+      "INSERT INTO events (title, event_date, slots, updated_at, uid) VALUES (?, ?, ?, ?, ?)",
+      ["Черновик", "2026-08-09", 7, "2026-08-09T20:00:00.000Z", "event-draft"],
+    );
+
+    db.prepare("DELETE FROM event_quotas").run();
+    db.prepare("DELETE FROM _migrations WHERE version = 13").run();
+
+    await runMigrations(executor);
+
+    expect(scalar(db, "SELECT slots FROM event_quotas WHERE event_id = ? AND raid_id = 0", [eventId])).toBe(7);
+    expect(scalar(db, "SELECT share FROM event_quotas WHERE event_id = ?", [eventId])).toBe(null);
+    expect(scalar(db, "SELECT slots FROM events WHERE id = ?", [eventId])).toBe(7);
   });
 
   it("сообщает, на какой миграции и запросе упало", async () => {

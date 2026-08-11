@@ -54,6 +54,10 @@ export function readBoolean(source: unknown, key: string): boolean {
   return Reflect.get(source, key) === true;
 }
 
+export function hasField(source: unknown, key: string): boolean {
+  return typeof source === "object" && source !== null && Reflect.has(source, key);
+}
+
 export function readArray(source: unknown, key: string): unknown[] {
   if (typeof source !== "object" || source === null) return [];
 

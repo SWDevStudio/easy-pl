@@ -3,7 +3,7 @@ type Listener = () => void;
 const listeners = new Set<Listener>();
 const WRITES = /^\s*(insert|update|delete|replace)\b/i;
 const SYNCED =
-  /\b(classes|raids|players|events|event_signups|event_slots|attendance|tombstones)\b/i;
+  /\b(classes|raids|players|events|event_signups|event_slots|event_quotas|attendance|tombstones)\b/i;
 
 let muted = 0;
 

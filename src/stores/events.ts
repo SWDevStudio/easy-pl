@@ -1,12 +1,14 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 import * as repository from "@/db/repositories/events";
-import type { EventInput, EventParticipant, GuildEvent } from "@/db/types";
+import { raidKeyOf } from "@/lottery/draw";
+import type { EventInput, EventParticipant, EventRaidSeats, GuildEvent } from "@/db/types";
 
 export const useEventsStore = defineStore("events", () => {
   const items = ref<GuildEvent[]>([]);
   const current = ref<GuildEvent | null>(null);
   const participants = ref<EventParticipant[]>([]);
+  const raidSeats = ref<EventRaidSeats[]>([]);
   const isLoading = ref(false);
   const isBusy = ref(false);
   const error = ref<string | null>(null);
@@ -16,6 +18,19 @@ export const useEventsStore = defineStore("events", () => {
     participants.value.filter((item) => item.slotSource !== null && item.reserveRank === null),
   );
   const unmarked = computed(() => roster.value.filter((item) => item.showedUp === null).length);
+  const freeSeats = computed(() =>
+    raidSeats.value.reduce((sum, group) => sum + Math.max(0, group.slots - group.occupied), 0),
+  );
+
+  function seatsOf(raidId: number | null): EventRaidSeats | null {
+    return raidSeats.value.find((group) => raidKeyOf(group.raidId) === raidKeyOf(raidId)) ?? null;
+  }
+
+  function freeSeatsOf(raidId: number | null): number {
+    const group = seatsOf(raidId);
+
+    return group === null ? 0 : Math.max(0, group.slots - group.occupied);
+  }
 
   async function load() {
     isLoading.value = true;
@@ -36,6 +51,7 @@ export const useEventsStore = defineStore("events", () => {
     try {
       current.value = await repository.getEvent(id);
       participants.value = await repository.listParticipants(id);
+      raidSeats.value = await repository.listRaidSeats(id);
       error.value = null;
     } catch (cause) {
       error.value = messageOf(cause);
@@ -108,10 +124,16 @@ export const useEventsStore = defineStore("events", () => {
     return run(() => repository.clearSignups(current.value!.id));
   }
 
-  async function runDraw() {
+  async function runDraw(options: repository.DrawOptions = {}) {
     if (!current.value) return false;
 
-    return run(() => repository.runDraw(current.value!.id));
+    return run(() => repository.runDraw(current.value!.id, options));
+  }
+
+  async function setSignupRaid(item: EventParticipant, raidId: number | null) {
+    if (!current.value) return false;
+
+    return run(() => repository.setSignupRaid(current.value!.id, item.playerId, raidId));
   }
 
   async function mark(item: EventParticipant, showedUp: boolean | null) {
@@ -162,9 +184,13 @@ export const useEventsStore = defineStore("events", () => {
     items,
     current,
     participants,
+    raidSeats,
     signedUp,
     roster,
     unmarked,
+    freeSeats,
+    seatsOf,
+    freeSeatsOf,
     isLoading,
     isBusy,
     error,
@@ -179,6 +205,7 @@ export const useEventsStore = defineStore("events", () => {
     clearSignups,
     runDraw,
     mark,
+    setSignupRaid,
     addToRoster,
     removeFromRoster,
     close,

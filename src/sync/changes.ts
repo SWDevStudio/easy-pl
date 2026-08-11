@@ -1,7 +1,9 @@
 import type { Sql } from "@/db/client";
 import { LEGACY_STAMP } from "@/db/migrations";
+import { NO_RAID } from "@/lottery/draw";
 import {
   APPLY_ORDER,
+  hasField,
   readArray,
   readBoolean,
   readNumber,
@@ -59,6 +61,12 @@ interface ChildRow {
   player_uid: string;
   a: number | null;
   b: string | null;
+}
+
+interface QuotaRow {
+  raid_uid: string | null;
+  slots: number;
+  share: number | null;
 }
 
 export async function collectChanges(db: Sql, since: string | null): Promise<Change[]> {
@@ -345,19 +353,43 @@ async function upsertEvent(db: Sql, change: Change, localId: number | null): Pro
 
 interface ResolvedRoster {
   complete: boolean;
-  signups: { playerId: number; isPriority: boolean }[];
+  hasQuotas: boolean;
+  quotas: { raidId: number; slots: number; share: number | null }[];
+  signups: { playerId: number; isPriority: boolean; raidId: number | null }[];
   slots: { playerId: number; source: string }[];
   attendance: { playerId: number; showedUp: boolean; markedAt: string }[];
 }
 
 async function resolveRoster(db: Sql, change: Change): Promise<ResolvedRoster> {
-  const resolved: ResolvedRoster = { complete: true, signups: [], slots: [], attendance: [] };
+  const resolved: ResolvedRoster = {
+    complete: true,
+    hasQuotas: hasField(change.data, "quotas"),
+    quotas: [],
+    signups: [],
+    slots: [],
+    attendance: [],
+  };
+
+  for (const raw of readArray(change.data, "quotas")) {
+    const raidId = await resolveRaid(db, raw, resolved);
+    if (raidId === null) continue;
+
+    resolved.quotas.push({
+      raidId,
+      slots: readNumber(raw, "slots") ?? 0,
+      share: readNumber(raw, "share"),
+    });
+  }
 
   for (const raw of readArray(change.data, "signups")) {
     const playerId = await resolvePlayer(db, raw, resolved);
     if (playerId === null) continue;
 
-    resolved.signups.push({ playerId, isPriority: readBoolean(raw, "isPriority") });
+    resolved.signups.push({
+      playerId,
+      isPriority: readBoolean(raw, "isPriority"),
+      raidId: await resolveSignupRaid(db, raw, resolved),
+    });
   }
 
   for (const raw of readArray(change.data, "roster")) {
@@ -391,6 +423,32 @@ async function resolvePlayer(db: Sql, raw: unknown, resolved: ResolvedRoster): P
   return null;
 }
 
+async function resolveRaid(db: Sql, raw: unknown, resolved: ResolvedRoster): Promise<number | null> {
+  const uid = readString(raw, "raidUid");
+
+  if (uid === null) return NO_RAID;
+
+  const raidId = await idByUid(db, "raids", uid);
+
+  if (raidId !== null) return raidId;
+  if ((await tombstoneAt(db, "raid", uid)) === null) resolved.complete = false;
+
+  return null;
+}
+
+async function resolveSignupRaid(db: Sql, raw: unknown, resolved: ResolvedRoster): Promise<number | null> {
+  const uid = readString(raw, "raidUid");
+
+  if (uid === null) return null;
+
+  const raidId = await idByUid(db, "raids", uid);
+
+  if (raidId !== null) return raidId;
+  if ((await tombstoneAt(db, "raid", uid)) === null) resolved.complete = false;
+
+  return null;
+}
+
 async function previousStamp(db: Sql, localId: number | null): Promise<string> {
   if (localId === null) return LEGACY_STAMP;
 
@@ -402,16 +460,17 @@ async function previousStamp(db: Sql, localId: number | null): Promise<string> {
 }
 
 async function replaceChildren(db: Sql, eventId: number, roster: ResolvedRoster): Promise<void> {
+  await replaceQuotas(db, eventId, roster);
   await db.execute(`DELETE FROM event_signups WHERE event_id = ?`, [eventId]);
   await db.execute(`DELETE FROM event_slots WHERE event_id = ?`, [eventId]);
   await db.execute(`DELETE FROM attendance WHERE event_id = ?`, [eventId]);
 
   for (const item of roster.signups) {
-    await db.execute(`INSERT OR IGNORE INTO event_signups (event_id, player_id, is_priority) VALUES (?, ?, ?)`, [
-      eventId,
-      item.playerId,
-      item.isPriority ? 1 : 0,
-    ]);
+    await db.execute(
+      `INSERT OR IGNORE INTO event_signups (event_id, player_id, is_priority, raid_id)
+       VALUES (?, ?, ?, ?)`,
+      [eventId, item.playerId, item.isPriority ? 1 : 0, item.raidId],
+    );
   }
 
   for (const item of roster.slots) {
@@ -429,11 +488,42 @@ async function replaceChildren(db: Sql, eventId: number, roster: ResolvedRoster)
   }
 }
 
+async function replaceQuotas(db: Sql, eventId: number, roster: ResolvedRoster): Promise<void> {
+  if (!roster.hasQuotas) return legacyQuota(db, eventId);
+
+  await db.execute(`DELETE FROM event_quotas WHERE event_id = ?`, [eventId]);
+
+  for (const item of roster.quotas) {
+    await db.execute(
+      `INSERT OR REPLACE INTO event_quotas (event_id, raid_id, slots, share) VALUES (?, ?, ?, ?)`,
+      [eventId, item.raidId, item.slots, item.share],
+    );
+  }
+}
+
+async function legacyQuota(db: Sql, eventId: number): Promise<void> {
+  const rows = await db.select<{ slots: number; quotas: number }[]>(
+    `SELECT e.slots, (SELECT COUNT(*) FROM event_quotas q WHERE q.event_id = e.id) AS quotas
+     FROM events e WHERE e.id = ?`,
+    [eventId],
+  );
+  const row = rows[0];
+
+  if (!row || row.quotas > 0 || row.slots <= 0) return;
+
+  await db.execute(`INSERT OR REPLACE INTO event_quotas (event_id, raid_id, slots) VALUES (?, ?, ?)`, [
+    eventId,
+    NO_RAID,
+    row.slots,
+  ]);
+}
+
 async function removeLocal(db: Sql, entity: Change["entity"], localId: number): Promise<void> {
   if (entity === "event") {
     await db.execute(`DELETE FROM attendance WHERE event_id = ?`, [localId]);
     await db.execute(`DELETE FROM event_slots WHERE event_id = ?`, [localId]);
     await db.execute(`DELETE FROM event_signups WHERE event_id = ?`, [localId]);
+    await db.execute(`DELETE FROM event_quotas WHERE event_id = ?`, [localId]);
     await db.execute(`DELETE FROM draw_log WHERE event_id = ?`, [localId]);
     await db.execute(`DELETE FROM events WHERE id = ?`, [localId]);
     return;
@@ -444,6 +534,13 @@ async function removeLocal(db: Sql, entity: Change["entity"], localId: number): 
     await db.execute(`DELETE FROM event_slots WHERE player_id = ?`, [localId]);
     await db.execute(`DELETE FROM event_signups WHERE player_id = ?`, [localId]);
     await db.execute(`DELETE FROM players WHERE id = ?`, [localId]);
+    return;
+  }
+
+  if (entity === "raid") {
+    await db.execute(`DELETE FROM event_quotas WHERE raid_id = ?`, [localId]);
+    await db.execute(`UPDATE event_signups SET raid_id = NULL WHERE raid_id = ?`, [localId]);
+    await db.execute(`DELETE FROM raids WHERE id = ?`, [localId]);
     return;
   }
 
@@ -593,8 +690,11 @@ function playerData(row: PlayerRow): Record<string, unknown> {
 
 async function eventData(db: Sql, row: EventRow): Promise<Record<string, unknown>> {
   const signups = await db.select<ChildRow[]>(
-    `SELECT p.uid AS player_uid, s.is_priority AS a, NULL AS b
-     FROM event_signups s JOIN players p ON p.id = s.player_id WHERE s.event_id = ?`,
+    `SELECT p.uid AS player_uid, s.is_priority AS a, g.uid AS b
+     FROM event_signups s
+     JOIN players p ON p.id = s.player_id
+     LEFT JOIN raids g ON g.id = s.raid_id
+     WHERE s.event_id = ?`,
     [row.id],
   );
 
@@ -610,6 +710,13 @@ async function eventData(db: Sql, row: EventRow): Promise<Record<string, unknown
     [row.id],
   );
 
+  const quotas = await db.select<QuotaRow[]>(
+    `SELECT r.uid AS raid_uid, q.slots, q.share
+     FROM event_quotas q LEFT JOIN raids r ON r.id = q.raid_id
+     WHERE q.event_id = ? AND (q.raid_id = 0 OR r.id IS NOT NULL)`,
+    [row.id],
+  );
+
   return {
     title: row.title,
     eventDate: row.event_date,
@@ -617,7 +724,12 @@ async function eventData(db: Sql, row: EventRow): Promise<Record<string, unknown
     seed: row.seed,
     share: row.share,
     status: row.status,
-    signups: signups.map((item) => ({ playerUid: item.player_uid, isPriority: item.a === 1 })),
+    quotas: quotas.map((item) => ({ raidUid: item.raid_uid, slots: item.slots, share: item.share })),
+    signups: signups.map((item) => ({
+      playerUid: item.player_uid,
+      isPriority: item.a === 1,
+      raidUid: item.b,
+    })),
     roster: roster.map((item) => ({ playerUid: item.player_uid, source: item.b })),
     attendance: attendance.map((item) => ({
       playerUid: item.player_uid,

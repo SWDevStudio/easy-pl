@@ -3,16 +3,29 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { storeToRefs } from "pinia";
 import DiscordSignupsModal from "@/components/discord/DiscordSignupsModal.vue";
+import DrawConfirmModal from "@/components/events/DrawConfirmModal.vue";
 import EventFormModal from "@/components/events/EventFormModal.vue";
 import DebtHint from "@/components/players/DebtHint.vue";
 import { UiButton, UiConfirm, UiPanel, UiStat, UiTable, type TableColumn } from "@/components/ui";
 import { useEventsStore } from "@/stores/events";
-import type { EventInput, EventParticipant, EventStatus } from "@/db/types";
+import { useRaidsStore } from "@/stores/raids";
+import type { EventInput, EventParticipant, EventRaidSeats, EventStatus } from "@/db/types";
 
 const route = useRoute();
 const eventsStore = useEventsStore();
-const { current, participants, signedUp, roster, unmarked, isLoading, isBusy, error } =
-  storeToRefs(eventsStore);
+const raidsStore = useRaidsStore();
+const {
+  current,
+  participants,
+  raidSeats,
+  signedUp,
+  roster,
+  unmarked,
+  freeSeats,
+  isLoading,
+  isBusy,
+  error,
+} = storeToRefs(eventsStore);
 
 const isDiscordOpen = ref(false);
 const isEditOpen = ref(false);
@@ -31,9 +44,30 @@ const isFirstLoad = computed(() => isLoading.value && current.value === null);
 const isDraft = computed(() => current.value?.status === "draft");
 const isDrawn = computed(() => current.value?.status === "drawn");
 const priorityCount = computed(() => signedUp.value.filter((item) => item.isPriority).length);
+const canDraw = computed(
+  () => signedUp.value.length > 0 && ((current.value?.slots ?? 0) > 0 || priorityCount.value > 0),
+);
 const noShows = computed(() => roster.value.filter((item) => item.showedUp === false).length);
 const occupied = computed(() => roster.value.length - noShows.value);
-const freeSeats = computed(() => Math.max(0, (current.value?.slots ?? 0) - occupied.value));
+const shortfall = computed(() =>
+  raidSeats.value.reduce((sum, group) => sum + Math.max(0, group.slots - group.signedUp), 0),
+);
+
+const seatColumns = computed<TableColumn<EventRaidSeats>[]>(() => [
+  { key: "raidName", label: "Рейд" },
+  { key: "slots", label: "Мест", headerClass: "text-right", class: "text-right", width: "7rem" },
+  { key: "signedUp", label: "Заявились", headerClass: "text-right", class: "text-right", width: "9rem" },
+  { key: "priority", label: "Вне жребия", headerClass: "text-right", class: "text-right", width: "9rem" },
+  { key: "taken", label: "В составе", headerClass: "text-right", class: "text-right", width: "9rem" },
+  {
+    key: "unfilled",
+    label: "За пати-лидером",
+    headerClass: "text-right",
+    class: "text-right",
+    width: "11rem",
+    sortValue: unfilledOf,
+  },
+]);
 
 const visible = computed(() => {
   const needle = query.value.trim().toLowerCase();
@@ -47,6 +81,7 @@ const visible = computed(() => {
 const columns = computed<TableColumn<EventParticipant>[]>(() => [
   { key: "familyName", label: "Фамилия" },
   { key: "className", label: "Класс" },
+  { key: "raidName", label: "Рейд", width: "13rem" },
   { key: "debt", label: "Долг", headerClass: "text-right", class: "text-right", width: "6rem" },
   ...(isDraft.value
     ? [
@@ -59,7 +94,11 @@ const columns = computed<TableColumn<EventParticipant>[]>(() => [
       ]),
 ]);
 
-onMounted(() => eventsStore.open(eventId.value));
+onMounted(() => {
+  eventsStore.open(eventId.value);
+  if (!raidsStore.hasLoaded) raidsStore.load();
+});
+
 watch(eventId, (id) => eventsStore.open(id));
 
 async function saveEvent(input: EventInput) {
@@ -68,8 +107,8 @@ async function saveEvent(input: EventInput) {
   if (saved) isEditOpen.value = false;
 }
 
-async function confirmDraw() {
-  const done = await eventsStore.runDraw();
+async function confirmDraw(seatPriorityOverQuota: boolean) {
+  const done = await eventsStore.runDraw({ seatPriorityOverQuota });
 
   if (done) isDrawConfirmOpen.value = false;
 }
@@ -122,6 +161,20 @@ function slotBadge(item: EventParticipant): string {
 
   return "badge-ghost";
 }
+
+function unfilledOf(group: EventRaidSeats): number {
+  return Math.max(0, group.slots - group.taken);
+}
+
+function seatsHint(item: EventParticipant): string {
+  const group = eventsStore.seatsOf(item.raidId);
+  const where = item.raidName === null ? "у игроков без рейда" : `в рейде «${item.raidName}»`;
+
+  if (!group || group.slots === 0) return `Мест ${where} не выделено`;
+  if (eventsStore.freeSeatsOf(item.raidId) === 0) return `Свободных мест ${where} нет`;
+
+  return `Отдать освободившееся место ${where}`;
+}
 </script>
 
 <template>
@@ -136,7 +189,7 @@ function slotBadge(item: EventParticipant): string {
           </span>
         </div>
         <p v-if="current" class="text-muted mt-1 text-sm">
-          {{ current.eventDate }} · {{ current.slots }} слотов
+          {{ current.eventDate }} · мест {{ current.slots }}
         </p>
       </template>
 
@@ -153,7 +206,11 @@ function slotBadge(item: EventParticipant): string {
             Снять всех
           </UiButton>
           <UiButton class="btn-ghost" @click="isDiscordOpen = true">Посмотреть по реакциям</UiButton>
-          <UiButton :disabled="!signedUp.length" @click="isDrawConfirmOpen = true">
+          <UiButton
+            :disabled="!canDraw"
+            :title="canDraw ? undefined : 'Сначала укажите места по рейдам'"
+            @click="isDrawConfirmOpen = true"
+          >
             Провести жеребьёвку
           </UiButton>
         </template>
@@ -183,7 +240,15 @@ function slotBadge(item: EventParticipant): string {
       <UiStat
         label="В составе"
         :value="isDraft ? '—' : `${occupied} / ${current?.slots ?? 0}`"
-        :hint="isDraft ? 'После жеребьёвки' : freeSeats ? `свободно ${freeSeats}` : 'мест нет'"
+        :hint="
+          isDraft
+            ? shortfall
+              ? `не хватает заявок: ${shortfall}`
+              : 'заявок хватает на все места'
+            : freeSeats
+              ? `свободно ${freeSeats}`
+              : 'мест нет'
+        "
         :is-loading="isFirstLoad"
       />
       <UiStat
@@ -193,6 +258,63 @@ function slotBadge(item: EventParticipant): string {
         :is-loading="isFirstLoad"
       />
     </div>
+
+    <UiPanel body-class="p-0">
+      <template #header>
+        <h3 class="panel-title">Места по рейдам</h3>
+        <p class="text-muted mt-1 text-sm">
+          Каждый рейд разыгрывает свои места. Недобор остаётся пати-лидеру и другому рейду не уходит.
+        </p>
+      </template>
+
+      <UiTable
+        :items="raidSeats"
+        :columns="seatColumns"
+        :row-key="(group) => group.raidId ?? 0"
+        :is-loading="isLoading"
+        :page-size="25"
+        class="table-zebra"
+      >
+        <template #cell-raidName="{ item }">
+          <span v-if="item.raidName" class="font-medium">{{ item.raidName }}</span>
+          <span v-else class="text-muted">Без рейда</span>
+        </template>
+
+        <template #cell-signedUp="{ item }">
+          <span v-if="item.signedUp < item.slots" class="text-warning">
+            {{ item.signedUp }}
+            <span class="text-muted">из {{ item.slots }}</span>
+          </span>
+          <span v-else>{{ item.signedUp }}</span>
+        </template>
+
+        <template #cell-priority="{ item }">
+          <span
+            v-if="item.priority > item.slots"
+            class="badge badge-warning badge-soft"
+            :title="`Мест ${item.slots} — лишних выведут сверх квоты или переведут в другой рейд`"
+          >
+            {{ item.priority }}
+          </span>
+          <span v-else>{{ item.priority }}</span>
+        </template>
+
+        <template #cell-taken="{ item }">
+          <span v-if="isDraft" class="text-muted/50">—</span>
+          <span v-else>{{ item.taken }}</span>
+        </template>
+
+        <template #cell-unfilled="{ item }">
+          <span v-if="isDraft" class="text-muted/50">—</span>
+          <span v-else-if="unfilledOf(item)" class="badge badge-warning badge-soft">
+            {{ unfilledOf(item) }}
+          </span>
+          <span v-else class="text-muted/50">—</span>
+        </template>
+
+        <template #empty>Места не распределены — укажите их в настройках осады</template>
+      </UiTable>
+    </UiPanel>
 
     <UiPanel body-class="p-0">
       <template #header>
@@ -224,6 +346,25 @@ function slotBadge(item: EventParticipant): string {
         <template #cell-className="{ item }">
           <span v-if="item.className">{{ item.className }}</span>
           <span v-else class="text-muted/50">—</span>
+        </template>
+
+        <template #cell-raidName="{ item }">
+          <div class="flex flex-wrap items-center gap-1">
+            <span v-if="item.raidName">{{ item.raidName }}</span>
+            <span v-else class="text-muted">Без рейда</span>
+
+            <button
+              v-if="item.isRaidGuest && isDraft"
+              type="button"
+              class="badge badge-info badge-soft"
+              title="Выведен в этот рейд только на эту осаду — вернуть в свой"
+              :disabled="isBusy"
+              @click="eventsStore.setSignupRaid(item, null)"
+            >
+              разово ✕
+            </button>
+            <span v-else-if="item.isRaidGuest" class="badge badge-info badge-soft">разово</span>
+          </div>
         </template>
 
         <template #cell-debt="{ item }">
@@ -284,8 +425,8 @@ function slotBadge(item: EventParticipant): string {
           <UiButton
             v-else-if="item.isSignedUp"
             class="btn-sm btn-ghost"
-            :class="{ 'text-muted': !freeSeats }"
-            :title="freeSeats ? 'Отдать освободившееся место' : 'Свободных мест нет'"
+            :class="{ 'text-muted': !eventsStore.freeSeatsOf(item.raidId) }"
+            :title="seatsHint(item)"
             @click="eventsStore.addToRoster(item)"
           >
             В состав
@@ -301,6 +442,7 @@ function slotBadge(item: EventParticipant): string {
     <EventFormModal
       v-model="isEditOpen"
       :event="current"
+      :seats="raidSeats"
       :lock-slots="isDrawn"
       :is-saving="isBusy"
       @save="saveEvent"
@@ -313,18 +455,17 @@ function slotBadge(item: EventParticipant): string {
       @imported="eventsStore.open(eventId)"
     />
 
-    <UiConfirm
+    <DrawConfirmModal
       v-model="isDrawConfirmOpen"
-      :title="isDrawn ? 'Переиграть жребий' : 'Провести жеребьёвку'"
-      :message="
-        isDrawn
-          ? 'Прошлый результат и отметки явки будут стёрты, состав разыграется заново.'
-          : `Разыграть ${current?.slots ?? 0} слотов среди ${signedUp.length} заявившихся?`
-      "
-      confirm-text="Разыграть"
-      confirm-class="btn-primary"
-      :is-loading="isBusy"
+      :seats="raidSeats"
+      :participants="participants"
+      :slots="current?.slots ?? 0"
+      :signed-up="signedUp.length"
+      :is-drawn="isDrawn"
+      :is-busy="isBusy"
       @confirm="confirmDraw"
+      @lend="(item, raidId) => eventsStore.setSignupRaid(item, raidId)"
+      @drop="(item) => eventsStore.togglePriority(item)"
     />
 
     <UiConfirm
